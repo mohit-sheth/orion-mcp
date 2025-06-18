@@ -1,5 +1,9 @@
-# utils/utils.py
-# Utility functions for the orion-mcp server
+"""
+Utility functions for the orion-mcp server.
+
+This module contains helper functions for running Orion analysis,
+converting data formats, and generating visualizations.
+"""
 
 import base64
 import io
@@ -8,8 +12,6 @@ import subprocess
 import json
 import shutil
 import asyncio
-import pprint
-import pandas as pd
 import matplotlib.pyplot as plt
 
 
@@ -20,16 +22,16 @@ async def run_orion(
     version: str,
 ) -> subprocess.CompletedProcess:
     """
-    Executes Orion to analyze performance data for regressions.
+    Execute Orion to analyze performance data for regressions.
 
     Args:
-        lookback (str): Days to look back for performance data. 
-        config (str): Path to the Orion configuration file to use for analysis.
-        data_source (str):  Location of the data (OpenSearch URL) to analyze. 
-        version (str): Version to analyze. 
+        lookback: Days to look back for performance data.
+        config: Path to the Orion configuration file to use for analysis.
+        data_source: Location of the data (OpenSearch URL) to analyze.
+        version: Version to analyze.
 
     Returns:
-        subprocess.CompletedProcess: The result of the Orion command execution, including stdout and stderr. 
+        The result of the Orion command execution, including stdout and stderr.
     """
 
     command = []
@@ -43,7 +45,7 @@ async def run_orion(
             "orion",
             "orion",
             "cmd",
-            "--lookback", "{}d".format(lookback),
+            "--lookback", f"{lookback}d",
             "--hunter-analyze",
             "--config", config,
             "-o", "json"
@@ -53,7 +55,7 @@ async def run_orion(
         command = [
             "orion",
             "cmd",
-            "--lookback", "{}d".format(lookback),
+            "--lookback", f"{lookback}d",
             "--hunter-analyze",
             "--config", config,
             "-o", "json"
@@ -71,19 +73,21 @@ async def run_orion(
             stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await process.communicate()
-        
+
         result = subprocess.CompletedProcess(
             args=command,
             returncode=process.returncode,
             stdout=stdout.decode('utf-8'),
             stderr=stderr.decode('utf-8')
         )
-            
+
         if result.returncode != 0:
-            return result 
+            return result
 
     except FileNotFoundError:
-        err_msg = f"Error: 'orion' command not found. Please ensure the cloud-bulldozer/orion tool is installed and in your PATH. COMMAND: {' '.join(command)}"
+        err_msg = (f"Error: 'orion' command not found. Please ensure the "
+                  f"cloud-bulldozer/orion tool is installed and in your PATH. "
+                  f"COMMAND: {' '.join(command)}")
         return err_msg
     except subprocess.CalledProcessError as e:
         error_message = f"Orion analysis failed with exit code {e.returncode}.\n"
@@ -98,13 +102,13 @@ async def run_orion(
 
 def convert_results_to_csv(results: list) -> str:
     """
-    Converts the results of the Orion analysis into a CSV format.
+    Convert the results of the Orion analysis into a CSV format.
 
     Args:
-        results (list): The list of results from the Orion analysis.
+        results: The list of results from the Orion analysis.
 
     Returns:
-        str: A string containing the CSV representation of the results.
+        A string containing the CSV representation of the results.
     """
     csv_lines = []
     for result in results:
@@ -118,17 +122,15 @@ def convert_results_to_csv(results: list) -> str:
     return "\n".join(csv_lines)
 
 
-async def csv_to_graph(
-    csv_data: str,
-) -> list[bytes]:
+async def csv_to_graph(csv_data: str) -> list[bytes]:
     """
-    Converts CSV data into a graph representation.
+    Convert CSV data into a graph representation.
 
     Args:
-        csv_data (str): The CSV data to convert.
+        csv_data: The CSV data to convert.
 
     Returns:
-       Decoded base64 string of the generated graph image. 
+        List of base64 encoded graph images.
     """
 
     # Dictionary to store parsed data:
@@ -136,7 +138,7 @@ async def csv_to_graph(
     # Value: List of numerical data points
     parsed_metrics_data = {}
 
-    # Group the data by workload and metric  
+    # Group the data by workload and metric
     grouped_data = {}
     for line in csv_data.strip().split('\n'):
         if not line.strip():
@@ -151,18 +153,19 @@ async def csv_to_graph(
         if file_path not in grouped_data:
             grouped_data[file_path] = {}
         if metric_name not in grouped_data[file_path]:
-            grouped_data[file_path][metric_name] = value 
-    
+            grouped_data[file_path][metric_name] = value
+
     # Split the input string into individual lines
     lines = csv_data.strip().split('\n')
 
     for line_num, line in enumerate(lines):
-        if not line.strip(): # Skip empty lines
+        if not line.strip():  # Skip empty lines
             continue
 
         parts = line.strip().split(',')
-        if len(parts) < 3: # Ensure at least path, metric_name, and one value
-            print(f"Warning: Skipping malformed line {line_num + 1}: '{line}'. Expected at least 3 comma-separated parts.")
+        if len(parts) < 3:  # Ensure at least path, metric_name, and one value
+            print(f"Warning: Skipping malformed line {line_num + 1}: '{line}'. "
+                  f"Expected at least 3 comma-separated parts.")
             continue
 
         file_path = parts[0]
@@ -176,14 +179,16 @@ async def csv_to_graph(
                 # Convert 'None' string to actual None, then filter out
                 numerical_values.append(float(val_str) if val_str.lower() != 'none' else None)
             except ValueError:
-                print(f"Warning: Could not convert '{val_str}' to a number in line {line_num + 1}. Skipping this value.")
+                print(f"Warning: Could not convert '{val_str}' to a number in line {line_num + 1}. "
+                      f"Skipping this value.")
                 numerical_values.append(None)
 
         # Filter out actual None values from the list before storing
         numerical_values = [val for val in numerical_values if val is not None]
 
         if not numerical_values:
-            print(f"Warning: No valid numerical data found for metric '{metric_name}' in '{file_path}'. Skipping plot for this entry.")
+            print(f"Warning: No valid numerical data found for metric '{metric_name}' "
+                  f"in '{file_path}'. Skipping plot for this entry.")
             continue
 
         # Store the data using a tuple as key for unique identification
@@ -192,21 +197,21 @@ async def csv_to_graph(
 
     if not parsed_metrics_data:
         print("No valid metric data found to generate graphs.")
-        return
+        return []
 
     imgs = []
 
     # Generate a line graph for each metric entry
     for (file_path, metric_name), values in parsed_metrics_data.items():
-        plt.figure(figsize=(12, 7)) # Set a good figure size
+        plt.figure(figsize=(12, 7))  # Set a good figure size
         # The X-axis will just be the index of the measurement
         plt.plot(range(len(values)), values, marker='o', linestyle='-', color='skyblue', linewidth=2)
 
         # Sanitize file_path for use in filename (replace slashes and dots with underscores)
         # and limit length to avoid overly long filenames
         sanitized_file_path = file_path.replace('/', '_').replace('.', '_').strip('_')
-        if len(sanitized_file_path) > 50: # Limit length
-            sanitized_file_path = sanitized_file_path[-50:] # Take last 50 chars
+        if len(sanitized_file_path) > 50:  # Limit length
+            sanitized_file_path = sanitized_file_path[-50:]  # Take last 50 chars
 
         # Add labels and title
         plt.title(f'{metric_name} Values\n(Workload: {file_path})', fontsize=16)
@@ -228,25 +233,22 @@ async def csv_to_graph(
             imgs.append(img_data)
         except Exception as e:
             print(f"Error with graph : {e}")
-        plt.close() # Close the figure to free up memory
-    
+        plt.close()  # Close the figure to free up memory
+
     # Add a small delay to prevent blocking
     await asyncio.sleep(0.01)
     return imgs
 
 
-async def summarize_result(
-    result: subprocess.CompletedProcess 
-) -> dict:
+async def summarize_result(result: subprocess.CompletedProcess) -> dict:
     """
-    summarizes the orion result into a dictionary.
+    Summarize the Orion result into a dictionary.
 
-    args:
-        result (str): the json output from the orion command.
-        config (str): the configuration file used for the orion analysis.
+    Args:
+        result: The json output from the Orion command.
 
-    returns:
-        dict: a dictionary containing the summary of the orion analysis.
+    Returns:
+        A dictionary containing the summary of the Orion analysis.
     """
     summary = {}
     try:
@@ -262,21 +264,21 @@ async def summarize_result(
                         "value": [metric_data["value"]],
                     }
                 else:
-                    summary[metric_name]["value"].append(metric_data["value"]) 
+                    summary[metric_name]["value"].append(metric_data["value"])
     except Exception as e:
-        return f"Error : {e}" 
+        return f"Error : {e}"
     return summary
 
 
 def get_data_source() -> str:
     """
-    provides the data source url for orion analysis. user must launch mcp 
-    server with the environment variable es_server set to the opensearch url.
+    Provide the data source URL for Orion analysis.
 
-    args:
-        data_source: The OpenSearch URL where performance data is stored.
+    User must launch MCP server with the environment variable ES_SERVER
+    set to the OpenSearch URL.
 
     Returns:
         The OpenSearch URL as a string.
     """
     return os.environ.get("ES_SERVER") 
+    
