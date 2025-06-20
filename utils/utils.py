@@ -15,27 +15,43 @@ import asyncio
 import matplotlib.pyplot as plt
 
 
-async def run_command_async(command: list[str], env: dict = None) -> subprocess.CompletedProcess:
+async def run_command_async(command: list[str] | str, env: dict = None, shell: bool = False) -> subprocess.CompletedProcess:
     """
     Run a command line tool asynchronously and return a CompletedProcess-like result.
     Args:
-        command: List of command arguments.
+        command: List of command arguments or a single string for shell=True.
         env: Optional environment variables to set for the command.
+        shell: Whether to use the shell to execute the command.
     Returns:
         A subprocess.CompletedProcess-like object with args, returncode, stdout, stderr.
     """
+    print(f"Running command: {command}")
     if env is not None:
         env_vars = os.environ.copy()
         env_vars.update(env)
     else:
         env_vars = None
     try:
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env_vars
-        )
+        if shell:
+            if not isinstance(command, str):
+                raise TypeError("command must be a string when shell=True")
+
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env_vars
+            )
+        else:
+            if not isinstance(command, list):
+                raise TypeError("command must be a list when shell=False")
+
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env_vars
+            )
         stdout, stderr = await process.communicate()
         result = subprocess.CompletedProcess(
             args=command,
@@ -71,6 +87,8 @@ async def run_orion(
     Returns:
         The result of the Orion command execution, including stdout and stderr.
     """
+    if data_source == "":
+        raise ValueError("Data source is not set")
     command = []
     if not shutil.which("orion"):
         print("Using orion from podman")
@@ -246,7 +264,7 @@ async def csv_to_graph(csv_data: str) -> list[bytes]:
     return imgs
 
 
-async def summarize_result(result: subprocess.CompletedProcess) -> dict:
+async def summarize_result(result: subprocess.CompletedProcess, isolate: str = None) -> dict:
     """
     Summarize the Orion result into a dictionary.
 
@@ -264,6 +282,11 @@ async def summarize_result(result: subprocess.CompletedProcess) -> dict:
         for run in data:
             for metric_name, metric_data in run["metrics"].items():
                 summary["timestamp"] = run["timestamp"]
+                # Isolate specific metric if specified
+                if isolate is not None:
+                    if isolate != metric_name:
+                        print(f"Skipping {metric_name} because it doesn't contain {isolate}")
+                        continue
                 if metric_name not in summary:
                     summary[metric_name] = {}
                     summary[metric_name] = {
@@ -273,6 +296,7 @@ async def summarize_result(result: subprocess.CompletedProcess) -> dict:
                     summary[metric_name]["value"].append(metric_data["value"])
     except Exception as e:
         return f"Error : {e}"
+    print(summary)
     return summary
 
 
@@ -288,27 +312,21 @@ def get_data_source() -> str:
     """
     return os.environ.get("ES_SERVER") 
 
-async def get_orion_metrics(orion_configs: list) -> str:
-    """
-    Provide the metrics for Orion analysis.
-    """
-    config_list = " ".join(orion_configs)
-    command = [
-        "grep",
-        "metricName",
-        config_list,
-        "|",
-        "awk",
-        "'{print $4}'", 
-        "|",
-        "sort",
-        "|",
-        "uniq",
-        "|",
-        "grep",
-        "-v",
-        "'^$'",
-    ]
-    result = await run_command_async(command)
-    return result.stdout
 
+async def orion_metrics(orion_configs: list) -> str:
+    """
+    Provide the namespaces for Orion analysis.
+    
+    Args:
+        orion_configs: List of Orion configuration files.
+
+    Returns:
+        A string containing the namespaces for Orion analysis.
+    """
+    metrics = []
+    for config in orion_configs:
+        result = await run_orion(lookback="1", config=config, data_source=get_data_source(), version="4.19")
+        sum_result = await summarize_result(result)
+        metrics.extend(list(sum_result.keys()))
+    return list(set(metrics))
+    

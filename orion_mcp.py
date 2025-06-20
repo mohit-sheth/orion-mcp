@@ -18,7 +18,8 @@ from utils.utils import (
     convert_results_to_csv,
     csv_to_graph,
     summarize_result,
-    get_data_source
+    get_data_source,
+    orion_metrics
 )
 
 mcp = FastMCP(name="orion-mcp",
@@ -47,18 +48,21 @@ def get_data_source_resource() -> str:
     return get_data_source()
 
 @mcp.resource("orion-mcp://get_orion_metrics")
-def get_orion_metrics() -> str:
+async def get_orion_metrics() -> str:
     """
     Provides the metrics for Orion analysis.
+
+    Returns:
+        The metrics for Orion analysis.
     """
-    return get_orion_metrics(ORION_CONFIGS)
+    return await orion_metrics(ORION_CONFIGS)
+
 
 @mcp.tool()
 async def openshift_report_on(
     version: Annotated[str, Field(description="Version of OpenShift to look into")] = "4.19",
     lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
-    metric: Annotated[str, Field(description="Metric to analyze")] = "CPU",
-    namespace: Annotated[str, Field(description="Namespace to analyze")] = "openshift-apiserver",
+    metric: Annotated[str, Field(description="Metric to analyze")] = "containerCPU",
     config: Annotated[str, Field(description="Config to analyze")] = "trt-external-payload-cluster-density.yaml",
 ) -> types.ImageContent | types.TextContent:
     """
@@ -71,22 +75,24 @@ async def openshift_report_on(
         version: Openshift version to look into.
         lookback: The number of days to look back for performance data. Defaults to 15 days.
         metric: The metric to analyze. Defaults to CPU.
-        namespace: The namespace to analyze. Defaults to openshift-apiserver.
         config: The config to analyze. Defaults to trt-external-payload-cluster-density.yaml.
 
     Returns:
         Returns an image showing the performance overtime.
     """
 
+    path="/orion/examples/"
+
     result = await run_orion(
         lookback=lookback,
-        config=config,
+        config=path + config,
         data_source=get_data_source(),
         version=version
     )
 
     if result.returncode != 0:
-        error_results = [{"error": summarize_result(result)}]
+        sum_result = await summarize_result(result)
+        error_results = [{"error": sum_result}]
         b64_imgs = await csv_to_graph(convert_results_to_csv(error_results))
         imgs = []
         for img in b64_imgs:
@@ -95,10 +101,11 @@ async def openshift_report_on(
             b64_img = img.decode('utf-8')
             imgs.append(types.ImageContent(type="image", data=b64_img, mimeType="image/jpeg"))
         return imgs[0]
+    
 
     data = {}
     data[config] = {}
-    data[config] = await summarize_result(result)
+    data[config] = await summarize_result(result,isolate=metric)
     results = [data]
     b64_imgs = await csv_to_graph(convert_results_to_csv(results))
     imgs = []
@@ -138,7 +145,8 @@ async def openshift_detailed_performance(
         )
         if result.returncode != 0:
             # If there's an error, return error images
-            error_results = [{"error": summarize_result(result)}]
+            sum_result = await summarize_result(result)
+            error_results = [{"error": sum_result}]
             b64_imgs = await csv_to_graph(convert_results_to_csv(error_results))
             imgs = []
             for img in b64_imgs:
@@ -168,7 +176,7 @@ async def openshift_detailed_performance(
 async def has_openshift_regressed(
     version: Annotated[str, Field(description="Version of OpenShift to look into")] = "4.19",
     lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
-) -> bool:
+) -> bool | str:
     """
     Runs a performance regression analysis against the OpenShift version using Orion.
 
@@ -193,7 +201,7 @@ async def has_openshift_regressed(
         )
 
         if result.returncode != 0:
-            return True
+            return result.stderr
 
     return False
 
