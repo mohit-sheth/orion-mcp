@@ -15,6 +15,44 @@ import asyncio
 import matplotlib.pyplot as plt
 
 
+async def run_command_async(command: list[str], env: dict = None) -> subprocess.CompletedProcess:
+    """
+    Run a command line tool asynchronously and return a CompletedProcess-like result.
+    Args:
+        command: List of command arguments.
+        env: Optional environment variables to set for the command.
+    Returns:
+        A subprocess.CompletedProcess-like object with args, returncode, stdout, stderr.
+    """
+    if env is not None:
+        env_vars = os.environ.copy()
+        env_vars.update(env)
+    else:
+        env_vars = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env_vars
+        )
+        stdout, stderr = await process.communicate()
+        result = subprocess.CompletedProcess(
+            args=command,
+            returncode=process.returncode,
+            stdout=stdout.decode('utf-8'),
+            stderr=stderr.decode('utf-8')
+        )
+        return result
+    except Exception as e:
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=1,
+            stdout='',
+            stderr=str(e)
+        )
+
+
 async def run_orion(
     lookback: str,
     config: str,
@@ -33,9 +71,7 @@ async def run_orion(
     Returns:
         The result of the Orion command execution, including stdout and stderr.
     """
-
     command = []
-
     if not shutil.which("orion"):
         print("Using orion from podman")
         command = [
@@ -60,43 +96,13 @@ async def run_orion(
             "--config", config,
             "-o", "json"
         ]
-
-    os.environ["ES_SERVER"] = data_source
-    os.environ["version"] = version
-    os.environ["es_metadata_index"] = "perf_scale_ci*"
-    os.environ["es_benchmark_index"] = "ripsaw-kube-burner-*"
-    try:
-        # Execute the command as a subprocess asynchronously
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-
-        result = subprocess.CompletedProcess(
-            args=command,
-            returncode=process.returncode,
-            stdout=stdout.decode('utf-8'),
-            stderr=stderr.decode('utf-8')
-        )
-
-        if result.returncode != 0:
-            return result
-
-    except FileNotFoundError:
-        err_msg = (f"Error: 'orion' command not found. Please ensure the "
-                  f"cloud-bulldozer/orion tool is installed and in your PATH. "
-                  f"COMMAND: {' '.join(command)}")
-        return err_msg
-    except subprocess.CalledProcessError as e:
-        error_message = f"Orion analysis failed with exit code {e.returncode}.\n"
-        error_message += f"Stderr:\n{e.stderr}"
-        error_message += f"Command: {' '.join(command)}\n"
-        return error_message
-    except Exception as e:
-        # Catch any other unexpected errors.
-        return f"An unexpected error occurred: {str(e)} \nCommand: {' '.join(command)}"
+    env = {
+        "ES_SERVER": data_source,
+        "version": version,
+        "es_metadata_index": "perf_scale_ci*",
+        "es_benchmark_index": "ripsaw-kube-burner-*"
+    }
+    result = await run_command_async(command, env=env)
     return result
 
 
@@ -281,4 +287,28 @@ def get_data_source() -> str:
         The OpenSearch URL as a string.
     """
     return os.environ.get("ES_SERVER") 
-    
+
+async def get_orion_metrics(orion_configs: list) -> str:
+    """
+    Provide the metrics for Orion analysis.
+    """
+    config_list = " ".join(orion_configs)
+    command = [
+        "grep",
+        "metricName",
+        config_list,
+        "|",
+        "awk",
+        "'{print $4}'", 
+        "|",
+        "sort",
+        "|",
+        "uniq",
+        "|",
+        "grep",
+        "-v",
+        "'^$'",
+    ]
+    result = await run_command_async(command)
+    return result.stdout
+

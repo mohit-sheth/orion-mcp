@@ -26,6 +26,12 @@ mcp = FastMCP(name="orion-mcp",
               port=3030,
               log_level='INFO')
 
+ORION_CONFIGS = [
+    "/orion/examples/trt-external-payload-cluster-density.yaml",
+    "/orion/examples/trt-external-payload-node-density.yaml",
+    "/orion/examples/trt-external-payload-node-density-cni.yaml",
+    "/orion/examples/trt-external-payload-crd-scale.yaml"
+]
 
 @mcp.resource("orion-mcp://get_data_source")
 def get_data_source_resource() -> str:
@@ -40,6 +46,68 @@ def get_data_source_resource() -> str:
     """
     return get_data_source()
 
+@mcp.resource("orion-mcp://get_orion_metrics")
+def get_orion_metrics() -> str:
+    """
+    Provides the metrics for Orion analysis.
+    """
+    return get_orion_metrics(ORION_CONFIGS)
+
+@mcp.tool()
+async def openshift_report_on(
+    version: Annotated[str, Field(description="Version of OpenShift to look into")] = "4.19",
+    lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
+    metric: Annotated[str, Field(description="Metric to analyze")] = "CPU",
+    namespace: Annotated[str, Field(description="Namespace to analyze")] = "openshift-apiserver",
+    config: Annotated[str, Field(description="Config to analyze")] = "trt-external-payload-cluster-density.yaml",
+) -> types.ImageContent | types.TextContent:
+    """
+    Captures a performance analysis against the specified OpenShift version using Orion.
+
+    Orion uses an EDivisive algorithm to analyze performance data from a specified
+    configuration file to detect any performance regressions.
+
+    Args:
+        version: Openshift version to look into.
+        lookback: The number of days to look back for performance data. Defaults to 15 days.
+        metric: The metric to analyze. Defaults to CPU.
+        namespace: The namespace to analyze. Defaults to openshift-apiserver.
+        config: The config to analyze. Defaults to trt-external-payload-cluster-density.yaml.
+
+    Returns:
+        Returns an image showing the performance overtime.
+    """
+
+    result = await run_orion(
+        lookback=lookback,
+        config=config,
+        data_source=get_data_source(),
+        version=version
+    )
+
+    if result.returncode != 0:
+        error_results = [{"error": summarize_result(result)}]
+        b64_imgs = await csv_to_graph(convert_results_to_csv(error_results))
+        imgs = []
+        for img in b64_imgs:
+            if img is None:
+                continue
+            b64_img = img.decode('utf-8')
+            imgs.append(types.ImageContent(type="image", data=b64_img, mimeType="image/jpeg"))
+        return imgs[0]
+
+    data = {}
+    data[config] = {}
+    data[config] = await summarize_result(result)
+    results = [data]
+    b64_imgs = await csv_to_graph(convert_results_to_csv(results))
+    imgs = []
+    for img in b64_imgs:
+        if img is None:
+            continue
+        b64_img = img.decode('utf-8')
+        imgs.append(types.ImageContent(type="image", data=b64_img, mimeType="image/jpeg"))
+    return imgs[0]
 
 @mcp.tool()
 async def openshift_detailed_performance(
@@ -59,17 +127,8 @@ async def openshift_detailed_performance(
     Returns:
         Returns an image showing the performance overtime.
     """
-    orion_configs = [
-        "/orion/examples/trt-external-payload-cluster-density.yaml",
-        "/orion/examples/trt-external-payload-node-density.yaml",
-        "/orion/examples/trt-external-payload-node-density-cni.yaml",
-        "/orion/examples/trt-external-payload-crd-scale.yaml"
-    ]
-
-    # Store all the results in a list
     results = []
-    # Prepare the command to run the orion tool.
-    for config in orion_configs:
+    for config in ORION_CONFIGS:
         data = {}
         result = await run_orion(
             lookback=lookback,
@@ -124,14 +183,7 @@ async def has_openshift_regressed(
         Returns true if there is a regression and false if there is no regression found.
     """
 
-    orion_configs = [
-        "/orion/examples/trt-external-payload-cluster-density.yaml",
-        "/orion/examples/trt-external-payload-node-density.yaml",
-        "/orion/examples/trt-external-payload-node-density-cni.yaml",
-        "/orion/examples/trt-external-payload-crd-scale.yaml"
-    ]
-
-    for config in orion_configs:
+    for config in ORION_CONFIGS:
         # Execute the command as a subprocess
         result = await run_orion(
             lookback=lookback,

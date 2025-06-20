@@ -36,4 +36,4 @@ RUN mkdir /orion
 RUN cp -r examples /orion/examples
 
 WORKDIR ../
-CMD ["python3.11", "orion-mcp.py"]
+CMD ["python3.11", "orion_mcp.py"]
