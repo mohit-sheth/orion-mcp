@@ -35,7 +35,6 @@ async def run_command_async(command: list[str] | str, env: dict = None, shell: b
         if shell:
             if not isinstance(command, str):
                 raise TypeError("command must be a string when shell=True")
-
             process = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
@@ -45,7 +44,6 @@ async def run_command_async(command: list[str] | str, env: dict = None, shell: b
         else:
             if not isinstance(command, list):
                 raise TypeError("command must be a list when shell=False")
-
             process = await asyncio.create_subprocess_exec(
                 *command,
                 stdout=asyncio.subprocess.PIPE,
@@ -60,7 +58,7 @@ async def run_command_async(command: list[str] | str, env: dict = None, shell: b
             stderr=stderr.decode('utf-8')
         )
         return result
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         return subprocess.CompletedProcess(
             args=command,
             returncode=1,
@@ -68,6 +66,11 @@ async def run_command_async(command: list[str] | str, env: dict = None, shell: b
             stderr=str(e)
         )
 
+def orion_configs(configs: list[str]) -> list[str]:
+    """
+    Return the list of Orion config filenames (not full paths).
+    """
+    return [os.path.basename(cfg) for cfg in configs]
 
 async def run_orion(
     lookback: str,
@@ -238,7 +241,10 @@ async def csv_to_graph(csv_data: str) -> list[bytes]:
             sanitized_file_path = sanitized_file_path[-50:]  # Take last 50 chars
 
         # Add labels and title
-        plt.title(f'{metric_name} Values\n(Workload: {file_path})', fontsize=16)
+        plt.title(
+            f'{metric_name} Values\n(Workload: {file_path})',
+            fontsize=16
+        )
         plt.xlabel('Measurement Index', fontsize=12)
         plt.ylabel(f'{metric_name} Value', fontsize=12)
         plt.grid(True, linestyle='--', alpha=0.7)
@@ -313,20 +319,27 @@ def get_data_source() -> str:
     return os.environ.get("ES_SERVER") 
 
 
-async def orion_metrics(orion_configs: list) -> str:
+async def orion_metrics(config_list: list) -> list:
     """
     Provide the namespaces for Orion analysis.
-    
     Args:
-        orion_configs: List of Orion configuration files.
-
+        config_list: List of Orion configuration files.
     Returns:
-        A string containing the namespaces for Orion analysis.
+        A list containing the namespaces for Orion analysis.
     """
     metrics = []
-    for config in orion_configs:
-        result = await run_orion(lookback="1", config=config, data_source=get_data_source(), version="4.19")
-        sum_result = await summarize_result(result)
-        metrics.extend(list(sum_result.keys()))
+    for config in config_list:
+        result = await run_orion(
+            lookback="1",
+            config=config,
+            data_source=get_data_source(),
+            version="4.19"
+        )
+        try:
+            sum_result = await summarize_result(result)
+            print(sum_result)
+            metrics.extend(list(sum_result.keys()))
+        except (KeyError, ValueError, TypeError) as e:
+            print(f"Error processing result for {config}: {e}")
     return list(set(metrics))
     

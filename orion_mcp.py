@@ -19,7 +19,8 @@ from utils.utils import (
     csv_to_graph,
     summarize_result,
     get_data_source,
-    orion_metrics
+    orion_metrics,
+    orion_configs
 )
 
 mcp = FastMCP(name="orion-mcp",
@@ -47,13 +48,20 @@ def get_data_source_resource() -> str:
     """
     return get_data_source()
 
-@mcp.resource("orion-mcp://get_orion_metrics")
+@mcp.tool()
+def get_orion_configs() -> list[str]:
+    """
+    Return the list of Orion config filenames (not full paths).
+    """
+    return orion_configs(ORION_CONFIGS)
+
+@mcp.tool()
 async def get_orion_metrics() -> str:
     """
     Provides the metrics for Orion analysis.
 
     Returns:
-        The metrics for Orion analysis.
+        The metrics names that Orion uses to analyze the data.
     """
     return await orion_metrics(ORION_CONFIGS)
 
@@ -99,7 +107,9 @@ async def openshift_report_on(
             if img is None:
                 continue
             b64_img = img.decode('utf-8')
-            imgs.append(types.ImageContent(type="image", data=b64_img, mimeType="image/jpeg"))
+            imgs.append(
+                types.ImageContent(type="image", data=b64_img, mimeType="image/jpeg")
+            )
         return imgs[0]
     
 
@@ -113,62 +123,9 @@ async def openshift_report_on(
         if img is None:
             continue
         b64_img = img.decode('utf-8')
-        imgs.append(types.ImageContent(type="image", data=b64_img, mimeType="image/jpeg"))
-    return imgs[0]
-
-@mcp.tool()
-async def openshift_detailed_performance(
-    version: Annotated[str, Field(description="Version of OpenShift to look into")] = "4.19",
-    lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
-) -> types.ImageContent | types.TextContent:
-    """
-    Captures a performance analysis against the specified OpenShift version using Orion.
-
-    Orion uses an EDivisive algorithm to analyze performance data from a specified
-    configuration file to detect any performance regressions.
-
-    Args:
-        version: Openshift version to look into.
-        lookback: The number of days to look back for performance data. Defaults to 15 days.
-
-    Returns:
-        Returns an image showing the performance overtime.
-    """
-    results = []
-    for config in ORION_CONFIGS:
-        data = {}
-        result = await run_orion(
-            lookback=lookback,
-            config=config,
-            data_source=get_data_source(),
-            version=version
+        imgs.append(
+            types.ImageContent(type="image", data=b64_img, mimeType="image/jpeg")
         )
-        if result.returncode != 0:
-            # If there's an error, return error images
-            sum_result = await summarize_result(result)
-            error_results = [{"error": sum_result}]
-            b64_imgs = await csv_to_graph(convert_results_to_csv(error_results))
-            imgs = []
-            for img in b64_imgs:
-                if img is None:
-                    continue
-                b64_img = img.decode('utf-8')
-                imgs.append(types.ImageContent(type="image", data=b64_img, mimeType="image/jpeg"))
-            return imgs[0]
-
-        data[config] = {}
-        data[config] = await summarize_result(result)
-        results.append(data)
-
-    # Process results and return all images
-    b64_imgs = await csv_to_graph(convert_results_to_csv(results))
-    imgs = []
-    for img in b64_imgs:
-        if img is None:
-            continue
-        b64_img = img.decode('utf-8')
-        imgs.append(types.ImageContent(type="image", data=b64_img, mimeType="image/jpeg"))
-
     return imgs[0]
 
 
