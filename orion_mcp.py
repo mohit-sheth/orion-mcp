@@ -169,6 +169,6 @@ def main():
 
 
 if __name__ == "__main__":
-    TRANSPORT = "sse"
+    TRANSPORT = "streamable-http"
     asyncio.run(mcp.run(transport=TRANSPORT))
     print("Running MCP server with transport:", TRANSPORT)
