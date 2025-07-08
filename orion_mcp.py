@@ -21,7 +21,8 @@ from utils.utils import (
     summarize_result,
     get_data_source,
     orion_metrics,
-    orion_configs
+    orion_configs,
+    generate_correlation_plot
 )
 
 mcp = FastMCP(name="orion-mcp",
@@ -33,7 +34,8 @@ ORION_CONFIGS = [
     "/orion/examples/trt-external-payload-cluster-density.yaml",
     "/orion/examples/trt-external-payload-node-density.yaml",
     "/orion/examples/trt-external-payload-node-density-cni.yaml",
-    "/orion/examples/trt-external-payload-crd-scale.yaml"
+    "/orion/examples/trt-external-payload-crd-scale.yaml",
+    "/orion/examples/small-scale-udn-l3.yaml"
 ]
 
 @mcp.resource("orion-mcp://get_data_source")
@@ -165,6 +167,62 @@ async def has_openshift_regressed(
             return f"Regression found while running config: {config}"
 
     return "No regressions found"
+
+
+# Correlation tool
+
+@mcp.tool()
+async def metrics_correlation(
+    metric1: Annotated[str, Field(description="First metric to analyze")] = "podReadyLatency_P99",
+    metric2: Annotated[str, Field(description="Second metric to analyze")] = "ovnCPU_avg",
+    config: Annotated[str, Field(description="Config to analyze")] = "trt-external-payload-cluster-density.yaml",
+    version: Annotated[str, Field(description="Version of OpenShift to look into")] = "4.19",
+    lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
+) -> types.ImageContent | types.TextContent:
+    """
+    Calculate and visualise the correlation between two metrics for a given
+    Orion configuration.
+
+    A scatter-plot annotated with the Pearson correlation coefficient is
+    returned. If either metric is missing from the Orion results the function
+    falls back to returning a textual error message.
+    """
+
+    path = "/orion/examples/"
+
+    # Run Orion to gather data
+    result = await run_orion(
+        lookback=lookback,
+        config=path + config,
+        data_source=get_data_source(),
+        version=version,
+    )
+
+    # Handle execution errors early
+    if result.returncode != 0:
+        summary_err = await summarize_result(result)
+        return types.TextContent(type="text", text=f"Failed to execute Orion: {summary_err}")
+
+    summary = await summarize_result(result)
+
+    # Ensure we received a valid dict back
+    if not isinstance(summary, dict):
+        return types.TextContent(type="text", text=f"Error processing Orion output: {summary}")
+
+    # Extract metric values
+    try:
+        values1 = summary[metric1]["value"]
+        values2 = summary[metric2]["value"]
+    except KeyError:
+        return types.TextContent(
+            type="text",
+            text="Requested metrics not present in the Orion summary for the chosen configuration.",
+        )
+
+    # Compute correlation & generate plot
+    corr_b64 = generate_correlation_plot(values1, values2, metric1, metric2, title_prefix=f"{config}: ")
+
+    return types.ImageContent(type="image", data=corr_b64.decode("utf-8"), mimeType="image/jpeg")
 
 
 def main():
