@@ -13,6 +13,7 @@ import json
 import shutil
 import asyncio
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 async def run_command_async(command: list[str] | str, env: dict = None, shell: bool = False) -> subprocess.CompletedProcess:
@@ -349,4 +350,64 @@ async def orion_metrics(config_list: list) -> dict | str:
         except (KeyError, ValueError, TypeError) as e:
             return f"Error processing result for {config}: {e}"
     return metrics 
+    
+
+# Correlation helper functions
+
+def compute_correlation(values1: list[float], values2: list[float]) -> float:
+    """
+    Compute the Pearson correlation coefficient between two numeric lists.
+
+    Args:
+        values1: First list of numeric values.
+        values2: Second list of numeric values.
+
+    Returns:
+        The Pearson correlation coefficient. Returns ``float('nan')`` if the
+        lists are of unequal length or contain fewer than two items.
+    """
+    if len(values1) != len(values2) or len(values1) < 2:
+        return float("nan")
+
+    # Use NumPy for a robust computation
+    return float(np.corrcoef(values1, values2)[0, 1])
+
+
+def generate_correlation_plot(
+    values1: list[float],
+    values2: list[float],
+    metric1: str,
+    metric2: str,
+    title_prefix: str = "",
+) -> bytes:
+    """
+    Create a scatter-plot that visualises the relationship between two metrics
+    and return it as a base64-encoded PNG image.
+
+    Args:
+        values1: Values for ``metric1`` placed on the Y-axis.
+        values2: Values for ``metric2`` placed on the X-axis.
+        metric1: Name of the first metric.
+        metric2: Name of the second metric.
+        title_prefix: Optional string to prepend to the plot title.
+
+    Returns:
+        Base64-encoded PNG bytes.
+    """
+
+    corr = compute_correlation(values1, values2)
+
+    plt.figure(figsize=(8, 6))
+    plt.scatter(values2, values1, alpha=0.7, color="steelblue")
+    plt.title(f"{title_prefix}Correlation between {metric1} and {metric2}\nPearson r = {corr:.3f}")
+    plt.xlabel(metric2)
+    plt.ylabel(metric1)
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.tight_layout()
+
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format="png")
+    plt.close()
+    buffer.seek(0)
+    return base64.b64encode(buffer.read())
     
