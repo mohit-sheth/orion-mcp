@@ -6,6 +6,7 @@ the cloud-bulldozer/orion library.
 """
 
 import asyncio
+import json
 import os
 from typing import Annotated
 from pydantic import Field
@@ -142,6 +143,20 @@ async def openshift_report_on(
     return imgs[0]
 
 
+def _extract_regression_metrics(stdout: str) -> list[str]:
+    """Extract regression metrics from orion output."""
+    data = json.loads(stdout)
+    metrics = []
+    for dat in data:
+        if not dat["is_changepoint"]:
+            continue
+        for metric in dat["metrics"]:
+            percentage_change = dat["metrics"][metric]["percentage_change"]
+            if percentage_change > 0:
+                metrics.append(f"{metric} increased by {percentage_change}%")
+    return metrics
+
+
 @mcp.tool()
 async def has_openshift_regressed(
     version: Annotated[str, Field(description="Version of OpenShift to look into")] = "4.19",
@@ -172,7 +187,9 @@ async def has_openshift_regressed(
         )
 
         if result.returncode != 0:
-            return f"Regression found while running config: {config}"
+            metrics = _extract_regression_metrics(result.stdout)
+            if metrics:
+                return f"Change found while running config: {config}, metrics: {', '.join(metrics)}"
 
     return "No regressions found"
 
