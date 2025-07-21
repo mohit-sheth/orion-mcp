@@ -6,6 +6,7 @@ the cloud-bulldozer/orion library.
 """
 
 import asyncio
+import json
 import os
 from typing import Annotated
 from pydantic import Field
@@ -35,7 +36,7 @@ ORION_CONFIGS = [
     "/orion/examples/trt-external-payload-node-density.yaml",
     "/orion/examples/trt-external-payload-node-density-cni.yaml",
     "/orion/examples/trt-external-payload-crd-scale.yaml",
-    "/orion/examples/small-scale-udn-l3.yaml"
+    "/orion/examples/small-scale-udn-l3.yaml",
 ]
 
 @mcp.resource("orion-mcp://get_data_source")
@@ -68,15 +69,18 @@ async def get_orion_metrics() -> dict:
         the key is the config the metric is associated with
         the value is a list of all the metric names that are available for that config
     """
-    return await orion_metrics(ORION_CONFIGS)
+    result = await orion_metrics(ORION_CONFIGS)
+    if isinstance(result, str):
+        return {"error": f"Failed to fetch Orion metrics: {result}"}
+    return result
 
 
 @mcp.tool()
 async def openshift_report_on(
     version: Annotated[str, Field(description="Version of OpenShift to look into")] = "4.19",
     lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
-    metric: Annotated[str, Field(description="Metric to analyze")] = "containerCPU",
-    config: Annotated[str, Field(description="Config to analyze")] = "cluster-density.yaml",
+    metric: Annotated[str, Field(description="Metric to analyze")] = "podReadyLatency_P99",
+    config: Annotated[str, Field(description="Config to analyze")] = "trt-external-payload-cluster-density.yaml",
 ) -> types.ImageContent | types.TextContent:
     """
     Captures a performance analysis against the specified OpenShift version using Orion.
@@ -103,8 +107,13 @@ async def openshift_report_on(
         version=version
     )
 
+    # Log the full result for debugging
+    print(f"Orion return code: {result.returncode}")
+    print(f"Orion stdout: {result.stdout}")
+    print(f"Orion stderr: {result.stderr}")
+
     if result.returncode != 0:
-        sum_result = await summarize_result(result)
+        sum_result = await summarize_result(result, isolate=metric)
         error_results = [{"error": sum_result}]
         b64_imgs = await csv_to_graph(convert_results_to_csv(error_results))
         imgs = []
@@ -116,7 +125,7 @@ async def openshift_report_on(
                 types.ImageContent(type="image", data=b64_img, mimeType="image/jpeg")
             )
         return imgs[0]
-    
+
 
     data = {}
     data[config] = {}
@@ -132,6 +141,20 @@ async def openshift_report_on(
             types.ImageContent(type="image", data=b64_img, mimeType="image/jpeg")
         )
     return imgs[0]
+
+
+def _extract_regression_metrics(stdout: str) -> list[str]:
+    """Extract regression metrics from orion output."""
+    data = json.loads(stdout)
+    metrics = []
+    for dat in data:
+        if not dat["is_changepoint"]:
+            continue
+        for metric in dat["metrics"]:
+            percentage_change = dat["metrics"][metric]["percentage_change"]
+            if percentage_change > 0:
+                metrics.append(f"{metric} increased by {percentage_change}%")
+    return metrics
 
 
 @mcp.tool()
@@ -164,7 +187,9 @@ async def has_openshift_regressed(
         )
 
         if result.returncode != 0:
-            return f"Regression found while running config: {config}"
+            metrics = _extract_regression_metrics(result.stdout)
+            if metrics:
+                return f"Change found while running config: {config}, metrics: {', '.join(metrics)}"
 
     return "No regressions found"
 
