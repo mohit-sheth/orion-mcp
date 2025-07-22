@@ -19,13 +19,15 @@ from typing import Optional
 
 async def run_command_async(command: list[str] | str, env: Optional[dict] = None, shell: bool = False) -> subprocess.CompletedProcess:
     """
-    Run a command line tool asynchronously and return a CompletedProcess-like result.
-    Args:
-        command: List of command arguments or a single string for shell=True.
-        env: Optional environment variables to set for the command.
-        shell: Whether to use the shell to execute the command.
+    Asynchronously executes a command-line tool and returns a CompletedProcess-like result.
+    
+    Parameters:
+        command (list[str] | str): The command to execute, as a list of arguments or a string if shell is True.
+        env (Optional[dict]): Optional environment variables to set for the command.
+        shell (bool): Whether to execute the command through the shell.
+    
     Returns:
-        A subprocess.CompletedProcess-like object with args, returncode, stdout, stderr.
+        subprocess.CompletedProcess: An object containing the command arguments, return code, standard output, and standard error.
     """
     print(f"Running command: {command}")
     if env is not None:
@@ -81,16 +83,19 @@ async def run_orion(
     version: str,
 ) -> subprocess.CompletedProcess:
     """
-    Execute Orion to analyze performance data for regressions.
-
-    Args:
-        lookback: Days to look back for performance data.
-        config: Path to the Orion configuration file to use for analysis.
-        data_source: Location of the data (OpenSearch URL) to analyze.
-        version: Version to analyze.
-
+    Runs the Orion tool to analyze performance regressions using the specified configuration, data source, and version.
+    
+    Parameters:
+        lookback (str): Number of days to look back for performance data (e.g., "10").
+        config (str): Path to the Orion configuration file.
+        data_source (str): OpenSearch URL containing the data to analyze.
+        version (str): Version identifier for the analysis.
+    
     Returns:
-        The result of the Orion command execution, including stdout and stderr.
+        subprocess.CompletedProcess: The result of the Orion command execution, including stdout and stderr.
+    
+    Raises:
+        ValueError: If the data source is not set.
     """
     if data_source == "":
         raise ValueError("Data source is not set")
@@ -135,13 +140,9 @@ async def run_orion(
 
 async def summarize_result(result: subprocess.CompletedProcess, isolate: Optional[str] = None) -> dict | str:
     """
-    Summarize the Orion result into a dictionary.
-
-    Args:
-        result: The json output from the Orion command.
-
-    Returns:
-        A dictionary containing the summary of the Orion analysis.
+    Parses and summarizes Orion JSON analysis results from a CompletedProcess object.
+    
+    If an `isolate` metric name is provided, only that metric is included in the summary. Returns a dictionary mapping metric names to their values and includes the timestamp of each run. If parsing fails, returns an error string.
     """
     summary = {}
     try:
@@ -171,13 +172,10 @@ async def summarize_result(result: subprocess.CompletedProcess, isolate: Optiona
 
 def get_data_source() -> str:
     """
-    Provide the data source URL for Orion analysis.
-
-    User must launch MCP server with the environment variable ES_SERVER
-    set to the OpenSearch URL.
-
-    Returns:
-        The OpenSearch URL as a string.
+    Returns the OpenSearch server URL from the ES_SERVER environment variable.
+    
+    Raises:
+        EnvironmentError: If the ES_SERVER environment variable is not set.
     """
     value = os.environ.get("ES_SERVER")
     if value is None:
@@ -187,13 +185,9 @@ def get_data_source() -> str:
 
 async def orion_metrics(config_list: list) -> dict | str:
     """
-    Provide the metrics for Orion analysis.
-    Args:
-        config_list: List of Orion configuration files.
-    Returns:
-        A dictionary containing the metrics for Orion analysis.
-        the key is the config the metric is associated with
-        the value is a list of all the metric names that are available for that config
+    Retrieves available metric names for each Orion configuration file.
+    
+    For each config file in the input list, runs Orion analysis and summarizes the result to extract metric names. Returns a dictionary mapping each config file to a list of its available metric names. If an error occurs during processing, returns an error string.
     """
     metrics = {} 
     for config in config_list:
@@ -246,18 +240,17 @@ def generate_correlation_plot(
     title_prefix: str = "",
 ) -> bytes:
     """
-    Create a scatter-plot that visualises the relationship between two metrics
-    and return it as a base64-encoded PNG image.
-
-    Args:
-        values1: Values for ``metric1`` placed on the Y-axis.
-        values2: Values for ``metric2`` placed on the X-axis.
-        metric1: Name of the first metric.
-        metric2: Name of the second metric.
-        title_prefix: Optional string to prepend to the plot title.
-
+    Generates a scatter plot visualizing the correlation between two metric value lists and returns the plot as base64-encoded PNG bytes.
+    
+    Parameters:
+        values1 (list[float]): Values for the first metric, plotted on the Y-axis.
+        values2 (list[float]): Values for the second metric, plotted on the X-axis.
+        metric1 (str): Name of the first metric.
+        metric2 (str): Name of the second metric.
+        title_prefix (str, optional): String to prepend to the plot title.
+    
     Returns:
-        Base64-encoded PNG bytes.
+        bytes: Base64-encoded PNG image of the correlation scatter plot.
     """
 
     corr = compute_correlation(values1, values2)
@@ -282,16 +275,19 @@ def generate_multi_line_plot(
     metric: str,
     title_prefix: str = "",
 ) -> bytes:
-    """Generate a multi-line plot where each key in *series_dict* becomes a
-    separate line.
-
-    Args:
-        series_dict: Mapping of *label* → list of numeric values.
-        metric: Metric name (used for y-axis label/title).
-        title_prefix: Optional string placed before the title.
-
+    """
+    Generates a multi-line plot from a dictionary of labeled numeric series and returns the plot as base64-encoded PNG bytes.
+    
+    Parameters:
+        series_dict (dict[str, list[float]]): Dictionary mapping labels to lists of numeric values, each plotted as a separate line.
+        metric (str): Name of the metric for the y-axis label and plot title.
+        title_prefix (str, optional): String to prepend to the plot title.
+    
     Returns:
-        Base64-encoded PNG image bytes.
+        bytes: Base64-encoded PNG image of the generated plot.
+    
+    Raises:
+        ValueError: If the input dictionary is empty.
     """
 
     if not series_dict:
