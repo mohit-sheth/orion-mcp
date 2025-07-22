@@ -44,20 +44,22 @@ ORION_CONFIGS_PATH = "/orion/examples/"
 @mcp.resource("orion-mcp://get_data_source")
 def get_data_source_resource() -> str:
     """
-    Provides the data source URL for Orion analysis.
-
-    User must launch MCP server with the environment variable ES_SERVER
-    set to the OpenSearch URL.
-
+    Return the OpenSearch URL used as the data source for Orion analysis.
+    
+    Requires the MCP server to be started with the ES_SERVER environment variable set to the OpenSearch URL.
+    
     Returns:
-        The OpenSearch URL as a string.
+        str: The OpenSearch URL.
     """
     return get_data_source()
 
 @mcp.tool()
 def get_orion_configs() -> list[str]:
     """
-    Return the list of Orion config filenames (not full paths).
+    Return a list of available Orion configuration filenames.
+    
+    Returns:
+        list[str]: Filenames of Orion configuration files without directory paths.
     """
     return orion_configs(ORION_CONFIGS)
 
@@ -65,14 +67,14 @@ def get_orion_configs() -> list[str]:
 async def get_orion_metrics(
     config: Annotated[str, Field(description="Orion configuration file name (e.g. 'small-scale-udn-l3.yaml')")] = "small-scale-udn-l3.yaml",
 ) -> dict:
-    """Return the list of metrics available for a specific Orion *config*.
-
-    Args:
-        config: **Filename** of the Orion configuration to query (not the full path).
-
+    """
+    Retrieve the available metrics for a specified Orion configuration file.
+    
+    Parameters:
+        config (str): The filename of the Orion configuration to query (e.g., 'small-scale-udn-l3.yaml').
+    
     Returns:
-        A dictionary where the key is the *config* (full path) and the value is a
-        list of metric names available for that configuration.
+        dict: A dictionary mapping the full configuration file path to a list of available metric names, or an error message if retrieval fails.
     """
 
     # Query only the requested config
@@ -92,19 +94,19 @@ async def openshift_report_on(
     config: Annotated[str, Field(description="Config to analyze")] = "small-scale-udn-l3.yaml",
 ) -> types.ImageContent | types.TextContent:
     """
-    Captures a performance analysis against the specified OpenShift version using Orion.
-
-    Orion uses an EDivisive algorithm to analyze performance data from a specified
-    configuration file to detect any performance regressions.
-
-    Args:
-        version: Openshift version to look into.
-        lookback: The number of days to look back for performance data. Defaults to 15 days.
-        metric: The metric to analyze. Defaults to CPU.
-        config: The config to analyze. Defaults to trt-external-payload-cluster-density.yaml.
-
+    Performs performance analysis for multiple OpenShift versions using Orion and visualizes metric trends.
+    
+    For each specified OpenShift version, runs Orion analysis with the given configuration and lookback period, extracts the specified metric, and aggregates results into a time series. Generates a multi-line plot (as a base64-encoded JPEG image) showing the metric's values over time for each version. Returns a textual error message if data is missing or malformed.
+    
+    Parameters:
+        versions (str): Comma-separated list of OpenShift versions to analyze (e.g., "4.19,4.20").
+        lookback (str): Number of days to look back for performance data.
+        metric (str): Name of the metric to analyze.
+        config (str): Orion configuration file name.
+    
     Returns:
-        Returns an image showing the performance overtime.
+        types.ImageContent: Image of the multi-line plot showing metric trends per version.
+        types.TextContent: Textual error message if analysis or data extraction fails.
     """
 
     # Parse versions into list
@@ -151,7 +153,15 @@ async def openshift_report_on(
 
 
 def _extract_regression_metrics(stdout: str) -> list[str]:
-    """Extract regression metrics from orion output."""
+    """
+    Parse Orion JSON output to identify metrics with significant changes at detected changepoints.
+    
+    Parameters:
+    	stdout (str): JSON-formatted string output from Orion containing changepoint analysis.
+    
+    Returns:
+    	list[str]: Descriptions of metrics that increased or decreased at changepoints, including the percentage change.
+    """
     data = json.loads(stdout)
     metrics = []
     for dat in data:
@@ -173,18 +183,16 @@ async def has_openshift_regressed(
     lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
 ) -> str:
     """
-    Runs a performance regression analysis against the OpenShift version using Orion.
-
-    Orion uses an EDivisive algorithm to analyze performance data from a specified
-    configuration file to detect any performance regressions.
-
-    Args:
-        version: Openshift version to look into.
-        lookback: The number of days to look back for performance data. Defaults to 15 days.
-
+    Checks for performance regressions in the specified OpenShift version across all Orion configurations.
+    
+    Runs Orion analysis for each configuration and aggregates any detected changepoints indicating metric regressions. Returns a summary of affected configurations and metrics, or "No changepoints found" if no regressions are detected.
+    
+    Parameters:
+        version (str): The OpenShift version to analyze.
+        lookback (str): Number of days to look back for performance data.
+    
     Returns:
-        Returns string stating if there is a regression and in which config it was found.
-                       If no regressions are found, returns "No regressions found".
+        str: Summary of detected changepoints or a message indicating no regressions were found.
     """
 
     changepoints = []
@@ -223,12 +231,13 @@ async def metrics_correlation(
     lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
 ) -> types.ImageContent | types.TextContent:
     """
-    Calculate and visualise the correlation between two metrics for a given
-    Orion configuration.
-
-    A scatter-plot annotated with the Pearson correlation coefficient is
-    returned. If either metric is missing from the Orion results the function
-    falls back to returning a textual error message.
+    Calculate and visualize the correlation between two specified metrics for a given Orion configuration and OpenShift version.
+    
+    Runs Orion analysis to extract values for both metrics, generates a scatter plot annotated with the Pearson correlation coefficient, and returns the plot as a base64-encoded JPEG image. If Orion execution fails or either metric is missing, returns a textual error message instead.
+    
+    Returns:
+        ImageContent: Base64-encoded JPEG image of the correlation plot if successful.
+        TextContent: Error message if Orion execution fails or metrics are missing.
     """
 
     # Run Orion to gather data
