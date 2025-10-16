@@ -26,6 +26,13 @@ from utils.utils import (
     list_orion_configs
 )
 
+RELEASE_DATES = {
+    4.17 : "2024-10-29",
+    4.18 : "2025-02-28",
+    4.19 : "2025-06-17",
+    4.20 : "2025-10-23"
+}
+
 mcp = FastMCP(name="orion-mcp",
               host="0.0.0.0",
               port=3030,
@@ -46,6 +53,13 @@ else:
     ORION_CONFIGS = _configs
 
 FULL_ORION_CONFIG_PATHS = [os.path.join(ORION_CONFIGS_PATH, config) for config in ORION_CONFIGS]
+
+@mcp.resource("orion-mcp://release_dates")
+def release_dates_resource() -> dict[float, str]:
+    """
+    Provides the release dates for the different OpenShift versions.
+    """
+    return RELEASE_DATES
 
 @mcp.resource("orion-mcp://get_data_source")
 def get_data_source_resource() -> str:
