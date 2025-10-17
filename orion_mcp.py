@@ -27,10 +27,10 @@ from utils.utils import (
 )
 
 RELEASE_DATES = {
-    4.17 : "2024-10-29",
-    4.18 : "2025-02-28",
-    4.19 : "2025-06-17",
-    4.20 : "2025-10-23"
+    "4.17": "2024-10-29",
+    "4.18": "2025-02-28",
+    "4.19": "2025-06-17",
+    "4.20": "2025-10-23",
 }
 
 mcp = FastMCP(name="orion-mcp",
@@ -55,7 +55,7 @@ else:
 FULL_ORION_CONFIG_PATHS = [os.path.join(ORION_CONFIGS_PATH, config) for config in ORION_CONFIGS]
 
 @mcp.resource("orion-mcp://release_dates")
-def release_dates_resource() -> dict[float, str]:
+def release_dates_resource() -> dict[str, str]:
     """
     Provides the release dates for the different OpenShift versions.
     """
@@ -170,21 +170,43 @@ async def openshift_report_on(
     return types.ImageContent(type="image", data=img_b64.decode("utf-8"), mimeType="image/jpeg")
 
 
-def _extract_regression_metrics(stdout: str) -> list[str]:
-    """Extract regression metrics from orion output."""
+def _extract_regression_details(stdout: str) -> list[dict]:
+    """Extract regression details (uuid, ocpVersion, previous ocpVersion, PR diffs, metrics)."""
     data = json.loads(stdout)
-    metrics = []
-    for dat in data:
-        if not dat["is_changepoint"]:
+    details: list[dict] = []
+    for idx, dat in enumerate(data):
+        if not dat.get("is_changepoint"):
             continue
-        for metric in dat["metrics"]:
-            percentage_change = dat["metrics"][metric]["percentage_change"]
-            if percentage_change > 0:
-                metrics.append(f"{metric} increased by {percentage_change:.2f}%")
-            elif percentage_change < 0:
-                metrics.append(f"{metric} decreased by {abs(percentage_change):.2f}%")
 
-    return metrics
+        # Build human-readable metric changes
+        metrics: list[str] = []
+        for metric_name, metric_info in dat.get("metrics", {}).items():
+            percentage_change = metric_info.get("percentage_change", 0)
+            if percentage_change > 0:
+                metrics.append(f"{metric_name} increased by {percentage_change:.2f}%")
+            elif percentage_change < 0:
+                metrics.append(f"{metric_name} decreased by {abs(percentage_change):.2f}%")
+
+        # Previous document (if available)
+        prev_doc = data[idx - 1] if idx > 0 else None
+        prev_ocp_version = prev_doc.get("ocpVersion") if isinstance(prev_doc, dict) else None
+
+        # Compute PR differences between current and previous
+        current_prs = dat.get("prs", []) or []
+        prev_prs = (prev_doc.get("prs", []) if isinstance(prev_doc, dict) else []) or []
+        # Preserve ordering while removing items present in the other list
+        prs_added = [p for p in current_prs if p not in prev_prs]
+
+        details.append({
+            "uuid": dat.get("uuid"),
+            "ocpVersion": dat.get("ocpVersion"),
+            "previousOcpVersion": prev_ocp_version,
+            "prs_added": prs_added,
+            "metrics": metrics,
+        })
+
+        
+    return details
 
 
 @mcp.tool()
@@ -212,6 +234,7 @@ async def has_openshift_regressed(
             "trt-external-payload-node-density.yaml",
             "trt-external-payload-node-density-cni.yaml",
             "trt-external-payload-crd-scale.yaml",
+            "small-scale-udn-l3.yaml",
     ]
     full_config_paths = [os.path.join(ORION_CONFIGS_PATH, config) for config in configs]
 
@@ -227,13 +250,27 @@ async def has_openshift_regressed(
         )
 
         if result.returncode not in (0, 3):
-            metrics = _extract_regression_metrics(result.stdout)
-            if metrics:
-                changepoints.append(
-                    f"⚠️ Change detected in configuration: '{full_config_path}'\n"
-                    "Affected metrics:\n" +
-                    "\n".join(f"  - {metric}" for metric in metrics)
-                )
+            details = _extract_regression_details(result.stdout)
+            for det in details:
+                header_lines = [
+                    f"⚠️ Change detected in configuration: '{full_config_path}'",
+                    f"UUID: {det.get('uuid')}",
+                    f"OCP Version: {det.get('ocpVersion')}",
+                    f"Previous OCP Version: {det.get('previousOcpVersion')}",
+                    "PRs added since Previous OCP Version:",
+                ]
+                prs_added = det.get("prs_added") or []
+                if prs_added:
+                    header_lines.extend([f"  - {pr}" for pr in prs_added])
+                else:
+                    header_lines.append("  - None")
+
+                metrics_list = det.get("metrics", [])
+                if metrics_list:
+                    header_lines.append("Affected metrics:")
+                    header_lines.extend([f"  - {m}" for m in metrics_list])
+
+                changepoints.append("\n".join(header_lines))
 
     if changepoints:
         return "\n\n".join(changepoints)

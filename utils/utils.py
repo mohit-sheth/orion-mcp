@@ -20,6 +20,24 @@ import numpy as np
 # Define ORION_CONFIGS_PATH locally to avoid circular import
 ORION_CONFIGS_PATH = "/orion/examples/"
 
+def resolve_env_var(primary_name: str, secondary_name: str, default_value: str) -> str:
+    """
+    Resolve an environment variable using a preferred name, a case-variant fallback,
+    and a default if neither is set to a non-empty value.
+
+    The current behavior prefers the lowercase variable (primary) and then falls
+    back to the uppercase variant (secondary) to preserve existing semantics.
+    """
+    primary_value = os.environ.get(primary_name)
+    if primary_value is not None and primary_value.strip() != "":
+        return primary_value
+
+    secondary_value = os.environ.get(secondary_name)
+    if secondary_value is not None and secondary_value.strip() != "":
+        return secondary_value
+
+    return default_value
+
 async def run_command_async(command: list[str] | str, env: Optional[dict] = None, shell: bool = False) -> subprocess.CompletedProcess:
     """
     Run a command line tool asynchronously and return a CompletedProcess-like result.
@@ -121,16 +139,16 @@ async def run_orion(
             "-o", "json"
         ]
 
-    es_metadata_index = os.environ.get("es_metadata_index")
-    if es_metadata_index is None or es_metadata_index == "":
-        es_metadata_index = os.environ.get("ES_METADATA_INDEX")
-    if es_metadata_index == "" :
-        es_metadata_index = "perf_scale_ci*"
-    es_benchmark_index = os.environ.get("es_benchmark_index")
-    if es_benchmark_index is None or es_benchmark_index == "":
-        es_benchmark_index = os.environ.get("ES_BENCHMARK_INDEX")
-    if es_benchmark_index == "" :
-        es_benchmark_index = "ripsaw-kube-burner-*"
+    es_metadata_index = resolve_env_var(
+        "es_metadata_index",
+        "ES_METADATA_INDEX",
+        "perf_scale_ci*",
+    )
+    es_benchmark_index = resolve_env_var(
+        "es_benchmark_index",
+        "ES_BENCHMARK_INDEX",
+        "ripsaw-kube-burner-*",
+    )
 
     env = {
         "ES_SERVER": data_source,
