@@ -209,44 +209,24 @@ def _extract_regression_details(stdout: str) -> list[dict]:
     return details
 
 
-@mcp.tool()
-async def has_openshift_regressed(
-    version: Annotated[str, Field(description="Version of OpenShift to look into")] = "4.19",
-    lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
+async def _run_regression_checks(
+    configs: list[str],
+    version: str,
+    lookback: str,
 ) -> str:
     """
-    Runs a performance regression analysis against the OpenShift version using Orion.
-
-    Orion uses an EDivisive algorithm to analyze performance data from a specified
-    configuration file to detect any performance regressions.
-
-    Args:
-        version: Openshift version to look into.
-        lookback: The number of days to look back for performance data. Defaults to 15 days.
-
-    Returns:
-        Returns string stating if there is a regression and in which config it was found.
-                       If no regressions are found, returns "No regressions found".
+    Execute Orion across the provided configs and return a formatted summary of
+    detected changepoints, or "No changepoints found" if none are detected.
     """
-
-    configs=[
-            "trt-external-payload-cluster-density.yaml",
-            "trt-external-payload-node-density.yaml",
-            "trt-external-payload-node-density-cni.yaml",
-            "trt-external-payload-crd-scale.yaml",
-            "small-scale-udn-l3.yaml",
-    ]
     full_config_paths = [os.path.join(ORION_CONFIGS_PATH, config) for config in configs]
-
-    changepoints = []
+    changepoints: list[str] = []
 
     for full_config_path in full_config_paths:
-        # Execute the command as a subprocess
         result = await run_orion(
             lookback=lookback,
             config=full_config_path,
             data_source=get_data_source(),
-            version=version
+            version=version,
         )
 
         if result.returncode not in (0, 3):
@@ -276,6 +256,54 @@ async def has_openshift_regressed(
         return "\n\n".join(changepoints)
     return "No changepoints found"
 
+@mcp.tool()
+async def has_openshift_regressed(
+    version: Annotated[str, Field(description="Version of OpenShift to look into")] = "4.19",
+    lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
+) -> str:
+    """
+    Runs a performance regression analysis against the OpenShift version using Orion.
+
+    Orion uses an EDivisive algorithm to analyze performance data from a specified
+    configuration file to detect any performance regressions.
+
+    Args:
+        version: Openshift version to look into.
+        lookback: The number of days to look back for performance data. Defaults to 15 days.
+
+    Returns:
+        Returns string stating if there is a regression and in which config it was found.
+                       If no regressions are found, returns "No regressions found".
+    """
+
+    configs = [
+        "trt-external-payload-cluster-density.yaml",
+        "trt-external-payload-node-density.yaml",
+        "trt-external-payload-node-density-cni.yaml",
+        "trt-external-payload-crd-scale.yaml",
+    ]
+    return await _run_regression_checks(configs, version=version, lookback=lookback)
+
+
+# Networking-only regression tool
+@mcp.tool()
+async def has_networking_regressed(
+    version: Annotated[str, Field(description="Version of OpenShift to look into")] = "4.19",
+    lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
+) -> str:
+    """
+    Runs a performance regression analysis against networking-focused configs.
+
+    Checks only the following Orion configurations:
+      - small-scale-udn-l3.yaml
+      - trt-external-payload-node-density-cni.yaml
+    """
+
+    configs = [
+        "small-scale-udn-l3.yaml",
+        "trt-external-payload-node-density-cni.yaml",
+    ]
+    return await _run_regression_checks(configs, version=version, lookback=lookback)
 
 # Correlation tool
 
