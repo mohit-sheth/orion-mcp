@@ -110,6 +110,7 @@ async def openshift_report_on(
     lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
     metric: Annotated[str, Field(description="Metric to analyze")] = "podReadyLatency_P99",
     config: Annotated[str, Field(description="Config to analyze")] = "small-scale-udn-l3.yaml",
+    options: Annotated[str, Field(description="Options in format 'output_format' or 'output_format:display_field'. Examples: 'image', 'json', 'both', 'json:ocpVirtVersion'")] = "image",
 ) -> types.ImageContent | types.TextContent:
     """
     Captures a performance analysis against the specified OpenShift version using Orion.
@@ -118,14 +119,23 @@ async def openshift_report_on(
     configuration file to detect any performance regressions.
 
     Args:
-        version: Comma-separated list of OpenShift versions to analyze.
+        versions: Comma-separated list of OpenShift versions to analyze.
         lookback: The number of days to look back for performance data. Defaults to 15 days.
-        metric: The metric to analyze. Defaults to CPU.
-        config: The config to analyze. Defaults to trt-external-payload-cluster-density.yaml.
+        metric: The metric to analyze. Defaults to podReadyLatency_P99.
+        config: The config to analyze. Defaults to small-scale-udn-l3.yaml.
+        options: Output format and optional display field. Format: 'output_format' or
+                'output_format:display_field'. Examples: 'image', 'json:ocpVirtVersion'.
 
     Returns:
-        Returns an image showing the performance overtime.
+        Returns an image showing the performance overtime, or JSON data based on options.
     """
+
+    # Parse options to extract output_format and display
+    if ":" in options:
+        output_format, display = options.split(":", 1)
+    else:
+        output_format = options
+        display = ""
 
     # Parse versions into list
     if isinstance(versions, str):
@@ -134,40 +144,78 @@ async def openshift_report_on(
         version_list = list(versions)
 
     series: dict[str, list[float]] = {}
+    full_data: dict[str, dict] = {}  # Store full summarized data for JSON output
 
+    errors = []
     for ver in version_list:
         result = await run_orion(
-            lookback=lookback,
             config=ORION_CONFIGS_PATH + config,
-            data_source=get_data_source(),
             version=ver,
+            lookback=lookback,
+            display=display if display.strip() else None,
         )
 
         sum_result = await summarize_result(result, isolate=metric)
 
         # Ensure we have the expected structure before indexing
         if not isinstance(sum_result, dict) or metric not in sum_result:
-            return types.TextContent(type="text", text=f"No data for version {ver}: {sum_result}")
+            errors.append(f"No data for version {ver}: {sum_result}")
+            continue
 
         raw_values = sum_result[metric].get("value", [])  # type: ignore[assignment]
         if not isinstance(raw_values, list):
-            return types.TextContent(type="text", text=f"Unexpected data format for version {ver}")
+            errors.append(f"Unexpected data format for version {ver}")
+            continue
 
         # Remove None values to keep the plot continuous
         values = [v for v in raw_values if v is not None]
         if not values:
-            return types.TextContent(type="text", text=f"All values are None for version {ver}")
+            errors.append(f"All values are None for version {ver}")
+            continue
 
         series[ver] = values
+        full_data[ver] = sum_result  # Store full data for JSON output
         print(f"series: {series}")
 
-    # Generate multi-line plot
-    try:
-        img_b64 = generate_multi_line_plot(series, metric, title_prefix=f"{config}: ")
-    except ValueError as e:
-        return types.TextContent(type="text", text=str(e))
+    if errors and not series:
+        return types.TextContent(type="text", text="\n".join(errors))
 
-    return types.ImageContent(type="image", data=img_b64.decode("utf-8"), mimeType="image/jpeg")
+    # Handle different output formats
+    if output_format.lower() == "json":
+        # Return JSON data
+        json_output = {
+            "config": config,
+            "metric": metric,
+            "lookback": lookback,
+            "display": display if display.strip() else None,
+            "data": full_data
+        }
+        return types.TextContent(type="text", text=json.dumps(json_output, indent=2))
+
+    if output_format.lower() == "both":
+        # Return both JSON and image info
+        json_output = {
+            "config": config,
+            "metric": metric,
+            "lookback": lookback,
+            "display": display if display.strip() else None,
+            "data": full_data,
+            "plot_info": "Image data follows JSON data"
+        }
+        try:
+            img_b64 = generate_multi_line_plot(series, metric, title_prefix=f"{config}: ")
+            combined_output = json.dumps(json_output, indent=2) + "\n\n[IMAGE_DATA_BASE64]\n" + img_b64.decode("utf-8")
+            return types.TextContent(type="text", text=combined_output)
+        except ValueError as e:
+            return types.TextContent(type="text", text=f"Error generating plot: {str(e)}\n\nJSON data:\n{json.dumps(json_output, indent=2)}")
+
+    else:
+        # Default: return image
+        try:
+            img_b64 = generate_multi_line_plot(series, metric, title_prefix=f"{config}: ")
+            return types.ImageContent(type="image", data=img_b64.decode("utf-8"), mimeType="image/jpeg")
+        except ValueError as e:
+            return types.TextContent(type="text", text=str(e))
 
 async def get_pr_details(organization: str, repository: str, pull_request: str, version: str = "4.20", lookback: str = "15") -> list[dict]:
     """
@@ -209,10 +257,9 @@ async def get_pr_details(organization: str, repository: str, pull_request: str, 
     
     for full_config_path in full_config_paths:
         result = await run_orion(
-            lookback=lookback,
             config=full_config_path,
-            data_source=get_data_source(),
             version=version,
+            lookback=lookback,
             input_vars=input_vars
         )
         data = json.loads(result.stdout)
@@ -340,10 +387,9 @@ async def _run_regression_checks(
 
     for full_config_path in full_config_paths:
         result = await run_orion(
-            lookback=lookback,
             config=full_config_path,
-            data_source=get_data_source(),
             version=version,
+            lookback=lookback,
         )
 
         if result.returncode not in (0, 3):
@@ -443,10 +489,9 @@ async def metrics_correlation(
 
     # Run Orion to gather data
     result = await run_orion(
-        lookback=lookback,
         config=ORION_CONFIGS_PATH + config,
-        data_source=get_data_source(),
         version=version,
+        lookback=lookback,
     )
 
     summary = await summarize_result(result)
