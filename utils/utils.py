@@ -38,17 +38,20 @@ def resolve_env_var(primary_name: str, secondary_name: str, default_value: str) 
 
     return default_value
 
-async def run_command_async(command: list[str] | str, env: Optional[dict] = None, shell: bool = False) -> subprocess.CompletedProcess:
+async def run_command_async(command: list[str] | str, env: Optional[dict] = None, shell: bool = False, cwd: Optional[str] = None) -> subprocess.CompletedProcess:
     """
     Run a command line tool asynchronously and return a CompletedProcess-like result.
     Args:
         command: List of command arguments or a single string for shell=True.
         env: Optional environment variables to set for the command.
         shell: Whether to use the shell to execute the command.
+        cwd: Optional working directory for the command.
     Returns:
         A subprocess.CompletedProcess-like object with args, returncode, stdout, stderr.
     """
     print(f"Running command: {command}")
+    if cwd:
+        print(f"Working directory: {cwd}")
     if env is not None:
         env_vars = os.environ.copy()
         env_vars.update(env)
@@ -62,7 +65,8 @@ async def run_command_async(command: list[str] | str, env: Optional[dict] = None
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=env_vars
+                env=env_vars,
+                cwd=cwd
             )
         else:
             if not isinstance(command, list):
@@ -71,7 +75,8 @@ async def run_command_async(command: list[str] | str, env: Optional[dict] = None
                 *command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=env_vars
+                env=env_vars,
+                cwd=cwd
             )
         stdout, stderr = await process.communicate()
         result = subprocess.CompletedProcess(
@@ -169,7 +174,7 @@ async def run_orion(
     }
 
     print(f"Env: {env}")
-    result = await run_command_async(command, env=env)
+    result = await run_command_async(command, env=env, cwd="/tmp")
     # Log the full result for debugging
     print(f"Orion return code: {result.returncode}")
     print(f"Orion stdout: {result.stdout}")
