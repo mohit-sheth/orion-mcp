@@ -152,6 +152,9 @@ podman build -t quay.io/YOUR_ORG/orion-mcp:latest .
 A production-ready `openshift-deployment.yml` is provided:
 
 ```bash
+# Create mcp project if required
+oc new-project orion-mcp
+
 # Update ES_SERVER env if required then apply
 oc apply -f openshift-deployment.yml
 
