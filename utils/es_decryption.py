@@ -1,8 +1,9 @@
 """
 ES Server Decryption for orion-mcp.
 
-Decrypts ES configuration (server, indices) from HTTP request headers sent by BugZooka.
-Uses AES-256-GCM with shared encryption key.
+Decrypts ES configuration (server, indices) from an encrypted HTTP request header
+sent by BugZooka. Uses AES-256-GCM with a shared symmetric key (same key for all
+encrypted header payloads).
 """
 import base64
 import json
@@ -12,18 +13,20 @@ from typing import Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from utils.constants import AES_GCM_KEY_LENGTH_BYTES, AES_GCM_NONCE_LENGTH_BYTES
+
 logger = logging.getLogger(__name__)
 
-# Header name for encrypted ES config
-HEADER_NAME = "X-Encrypted-ES-Context"
+# Encrypted payload header
+HEADER_NAME = "X-Encrypted-Context"
 
 
 def get_es_server_from_headers(headers: dict) -> Optional[dict]:
     """
     Extract and decrypt ES configuration from request headers.
 
-    Looks for X-Encrypted-ES-Context header (case-insensitive),
-    decrypts it using ES_ENCRYPTION_KEY, and returns ES config dict.
+    Looks for X-Encrypted-Context header (case-insensitive),
+    decrypts it using HEADER_ENCRYPTION_KEY, and returns ES config dict.
 
     :param headers: HTTP request headers dict
     :return: Decrypted ES config dict with keys:
@@ -34,7 +37,7 @@ def get_es_server_from_headers(headers: dict) -> Optional[dict]:
     :raises ValueError: If decryption fails
 
     Example:
-        >>> headers = {"X-Encrypted-ES-Context": "AQAAAACKzJ8R7vN...=="}
+        >>> headers = {"X-Encrypted-Context": "AQAAAACKzJ8R7vN...=="}
         >>> es_config = get_es_server_from_headers(headers)
         >>> print(es_config)
         {
@@ -97,7 +100,7 @@ def decrypt_es_server(encrypted_blob: str) -> str:
 
     :param encrypted_blob: Base64-encoded encrypted data
     :return: Decrypted ES config as JSON string
-    :raises ValueError: If decryption fails or ES_ENCRYPTION_KEY not set
+    :raises ValueError: If decryption fails or HEADER_ENCRYPTION_KEY not set
 
     Example:
         >>> encrypted = "AQAAAACKzJ8R7vN...base64blob...=="
@@ -105,11 +108,11 @@ def decrypt_es_server(encrypted_blob: str) -> str:
         >>> print(config_json)
         {"es_server": "https://es-prod.example.com:9200", "es_metadata_index": "...", ...}
     """
-    # Get encryption key from environment
-    encryption_key_b64 = os.environ.get("ES_ENCRYPTION_KEY")
+    # Shared symmetric key (base64-encoded 32 bytes); same value used to encrypt on BugZooka
+    encryption_key_b64 = os.environ.get("HEADER_ENCRYPTION_KEY")
     if not encryption_key_b64:
         raise ValueError(
-            "ES_ENCRYPTION_KEY environment variable not set. "
+            "HEADER_ENCRYPTION_KEY environment variable not set. "
             "This key must match the one used in BugZooka."
         )
 
@@ -117,12 +120,14 @@ def decrypt_es_server(encrypted_blob: str) -> str:
     try:
         encryption_key = base64.b64decode(encryption_key_b64)
     except Exception as e:
-        raise ValueError(f"Invalid ES_ENCRYPTION_KEY format (must be base64): {e}") from e
-
-    # Validate key length (should be 32 bytes for AES-256)
-    if len(encryption_key) != 32:
         raise ValueError(
-            f"ES_ENCRYPTION_KEY must be 256 bits (32 bytes), got {len(encryption_key)} bytes"
+            f"Invalid HEADER_ENCRYPTION_KEY format (must be base64): {e}"
+        ) from e
+
+    if len(encryption_key) != AES_GCM_KEY_LENGTH_BYTES:
+        raise ValueError(
+            "HEADER_ENCRYPTION_KEY must decode to "
+            f"{AES_GCM_KEY_LENGTH_BYTES} bytes (AES-256), got {len(encryption_key)} bytes"
         )
 
     # Decode encrypted blob from base64
@@ -131,17 +136,15 @@ def decrypt_es_server(encrypted_blob: str) -> str:
     except Exception as e:
         raise ValueError(f"Invalid encrypted blob format (must be base64): {e}") from e
 
-    # Validate minimum length (12 bytes for nonce)
-    if len(encrypted_data) < 12:
+    if len(encrypted_data) < AES_GCM_NONCE_LENGTH_BYTES:
         raise ValueError(
-            f"Encrypted data too short (minimum 12 bytes for nonce), got {len(encrypted_data)} bytes"
+            "Encrypted data too short "
+            f"(minimum {AES_GCM_NONCE_LENGTH_BYTES} bytes for nonce), "
+            f"got {len(encrypted_data)} bytes"
         )
 
-    # Extract nonce (first 12 bytes)
-    nonce = encrypted_data[:12]
-
-    # Extract ciphertext + authentication tag (remaining bytes)
-    ciphertext_with_tag = encrypted_data[12:]
+    nonce = encrypted_data[:AES_GCM_NONCE_LENGTH_BYTES]
+    ciphertext_with_tag = encrypted_data[AES_GCM_NONCE_LENGTH_BYTES:]
 
     # Decrypt using AES-GCM
     aesgcm = AESGCM(encryption_key)
@@ -150,7 +153,7 @@ def decrypt_es_server(encrypted_blob: str) -> str:
     except Exception as e:
         raise ValueError(
             f"Decryption failed (wrong key or corrupted data): {e}. "
-            "Ensure ES_ENCRYPTION_KEY matches the one in BugZooka."
+            "Ensure HEADER_ENCRYPTION_KEY matches the one in BugZooka."
         ) from e
 
     # Decode to string (JSON config)
