@@ -32,7 +32,7 @@ from utils.utils import (
     filter_data_by_timestamp,
     current_es_config,  # Context variable for ES config isolation
 )
-from utils.es_decryption import get_es_server_from_headers
+from utils.header_decryption import get_es_config_from_headers
 
 RELEASE_DATES = {
     "4.17": "2024-10-29",
@@ -86,7 +86,7 @@ def _extract_and_set_es_server(ctx) -> None:
             if request and hasattr(request, 'headers'):
                 # Convert Starlette Headers to dict
                 headers_dict = dict(request.headers)
-                es_config = get_es_server_from_headers(headers_dict)
+                es_config = get_es_config_from_headers(headers_dict)
                 if es_config:
                     current_es_config.set(es_config)
     except Exception:
