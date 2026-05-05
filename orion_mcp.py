@@ -15,7 +15,7 @@ import jinja2
 import yaml
 
 from mcp import types
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 # Import utility functions from utils module
 from utils.utils import (
@@ -30,7 +30,9 @@ from utils.utils import (
     parse_nightly_version,
     parse_timestamp,
     filter_data_by_timestamp,
+    current_es_config,  # Context variable for ES config isolation
 )
+from utils.header_decryption import get_es_config_from_headers
 
 RELEASE_DATES = {
     "4.17": "2024-10-29",
@@ -61,6 +63,36 @@ else:
     ORION_CONFIGS = _configs
 
 FULL_ORION_CONFIG_PATHS = [os.path.join(ORION_CONFIGS_PATH, config) for config in ORION_CONFIGS]
+
+
+def _extract_and_set_es_server(ctx) -> None:
+    """
+    Extract ES config from request headers and set in context variable.
+
+    If encrypted ES config found in headers, decrypts it and sets current_es_config
+    context variable. Config includes: es_server, es_metadata_index, es_benchmark_index.
+    Downstream code (get_data_source, get_es_metadata_index, get_es_benchmark_index)
+    checks context first.
+
+    Falls back to environment variables if no header present.
+    """
+    if not ctx:
+        return
+
+    # Access HTTP headers through ctx.request_context.request.headers (Starlette Request)
+    try:
+        if hasattr(ctx, 'request_context') and ctx.request_context:
+            request = ctx.request_context.request
+            if request and hasattr(request, 'headers'):
+                # Convert Starlette Headers to dict
+                headers_dict = dict(request.headers)
+                es_config = get_es_config_from_headers(headers_dict)
+                if es_config:
+                    current_es_config.set(es_config)
+    except Exception:
+        # Silently fall back to environment variables
+        pass
+
 
 @mcp.resource("orion-mcp://release_dates")
 def release_dates_resource() -> dict[str, str]:
@@ -116,17 +148,21 @@ async def get_orion_metrics(
         ),
     ] = None,
     version: Annotated[str, Field(description="OpenShift version used to query metrics")] = "4.20",
+    ctx: Context = None,
 ) -> dict:
     """Return the list of metrics available for a specific Orion *config*.
 
     Args:
         config_name: **Filename** of the Orion configuration to query (not the full path).
         version: OpenShift version used to query metrics.
+        ctx: MCP context for accessing request headers
 
     Returns:
         A dictionary where the key is the *config* (full path) and the value is a
         list of metric names available for that configuration.
     """
+    # Extract and set ES_SERVER from request headers if present
+    _extract_and_set_es_server(ctx)
 
     default_config = "small-scale-udn-l3.yaml"
     effective_config = config_name or default_config
@@ -149,16 +185,21 @@ async def get_orion_metrics_with_meta(
         ),
     ] = None,
     version: Annotated[str, Field(description="OpenShift version used to render the config template")] = "4.19",
+    ctx: Context = None,
 ) -> dict:
     """Return metrics and metadata for a specific Orion *config*.
 
     Args:
         config_name: **Filename** of the Orion configuration to query (not the full path).
         version: OpenShift version used to render the config template.
+        ctx: MCP context for accessing request headers
 
     Returns:
         A dictionary with "metrics" (list) and "meta" (per-metric metadata).
     """
+    # Extract and set ES_SERVER from request headers if present
+    _extract_and_set_es_server(ctx)
+
     default_config = "small-scale-udn-l3.yaml"
     effective_config = config_name or default_config
     try:
@@ -190,6 +231,7 @@ async def openshift_report_on(
         Field(description="Orion configuration file name (e.g. 'small-scale-udn-l3.yaml')"),
     ] = None,
     options: Annotated[str, Field(description="Options in format 'output_format' or 'output_format:display_field'. Examples: 'image', 'json', 'both', 'json:ocpVirtVersion'")] = "image",
+    ctx: Context = None,
 ) -> types.ImageContent | types.TextContent:
     """
     Captures a performance analysis against the specified OpenShift version using Orion.
@@ -209,6 +251,8 @@ async def openshift_report_on(
     Returns:
         Returns an image showing the performance overtime, or JSON data based on options.
     """
+    # Extract and set ES_SERVER from request headers if present
+    _extract_and_set_es_server(ctx)
 
     # Parse options to extract output_format and display
     if ":" in options:
@@ -314,12 +358,16 @@ async def get_orion_performance_data(
     version: Annotated[str, Field(description="OpenShift version to analyze")] = "4.19",
     lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
     since: Annotated[str | None, Field(description="Date to begin looking back for performance data")] = None,
+    ctx: Context = None,
 ) -> dict:
     """Return performance data values for a specific config/metric/version.
 
     Returns:
         Dict with config, metric, version, lookback, values, count.
     """
+    # Extract and set ES_SERVER from request headers if present
+    _extract_and_set_es_server(ctx)
+
     default_config = "small-scale-udn-l3.yaml"
     config_value = config_name or default_config
     try:
@@ -354,20 +402,20 @@ async def get_orion_performance_data(
 async def get_pr_details(organization: str, repository: str, pull_request: str, version: str = "4.20", lookback: str = "15") -> list[dict]:
     """
     Get PR performance analysis details by running Orion with input variables.
-    
+
     Args:
         organization: GitHub organization name
-        repository: Repository name  
+        repository: Repository name
         pull_request: Pull request number
         version: OpenShift version to analyze
         lookback: Days to look back for data
-        
+
     Returns:
-        List of dictionaries containing PR analysis results for each config. 
+        List of dictionaries containing PR analysis results for each config.
         Each dictionary contains the config, periodic_avg, and pull.
         periodic_avg is the average of the periodic metrics for the version.
         pull contains the results from running performance tests aginst the pull request.
-        The LLM should compare the periodic_avg to the pull metrics and determine if the PR introduces a performance regression. 
+        The LLM should compare the periodic_avg to the pull metrics and determine if the PR introduces a performance regression.
         The LLM should use a 10% threshold to determine if the PR introduces a performance regression.
     """
 
@@ -385,10 +433,10 @@ async def get_pr_details(organization: str, repository: str, pull_request: str, 
         "pull_number": pull_request,
         "version": version
     }
-            
+
     full_config_paths = [os.path.join(ORION_CONFIGS_PATH, config) for config in configs]
     summaries: list[dict] = []
-    
+
     for full_config_path in full_config_paths:
         result = await run_orion(
             config=full_config_path,
@@ -443,10 +491,12 @@ async def get_pr_details(organization: str, repository: str, pull_request: str, 
 @mcp.tool()
 async def openshift_report_on_pr(
     version: Annotated[str, Field(description="OpenShift version to analyze")] = "4.20",
+    *,
     lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
     organization: Annotated[str, Field(description="Organization to look into")] = "openshift",
     repository: Annotated[str, Field(description="Repository to look into")] = "ovn-kubernetes",
     pull_request: Annotated[str, Field(description="PR to look into")] = "2841",
+    ctx: Context = None,
 ) -> dict:
     """
     Captures a performance analysis against the specified OpenShift version using Orion.
@@ -457,11 +507,15 @@ async def openshift_report_on_pr(
         organization: The organization to look into. Defaults to openshift.
         repository: The repository to look into. Defaults to ovn-kubernetes.
         pull_request: The PR to look into. Defaults to 2841.
+        ctx: MCP context for accessing request headers
 
     Returns:
         List of dictionaries containing PR analysis results for each version.
     """
-    # Get the PR details
+    # Extract and set ES_SERVER from request headers if present
+    _extract_and_set_es_server(ctx)
+
+    # Get the PR details (will use ES_SERVER from context variable)
     summaries = await get_pr_details(organization, repository, pull_request, version, lookback)
     return {
         "summaries": summaries
@@ -515,6 +569,11 @@ async def _run_regression_checks(
     """
     Execute Orion across the provided configs and return a formatted summary of
     detected changepoints, or "No changepoints found" if none are detected.
+
+    Args:
+        configs: List of Orion config filenames
+        version: OpenShift version
+        lookback: Days to look back
     """
     full_config_paths = [os.path.join(ORION_CONFIGS_PATH, config) for config in configs]
     changepoints: list[str] = []
@@ -557,6 +616,7 @@ async def _run_regression_checks(
 async def has_openshift_regressed(
     version: Annotated[str, Field(description="Version of OpenShift to look into")] = "4.19",
     lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
+    ctx: Context = None,
 ) -> str:
     """
     Runs a performance regression analysis against the OpenShift version using Orion.
@@ -567,11 +627,14 @@ async def has_openshift_regressed(
     Args:
         version: Openshift version to look into.
         lookback: The number of days to look back for performance data. Defaults to 15 days.
+        ctx: MCP context for accessing request headers
 
     Returns:
         Returns string stating if there is a regression and in which config it was found.
                        If no regressions are found, returns "No regressions found".
     """
+    # Extract and set ES_SERVER from request headers if present
+    _extract_and_set_es_server(ctx)
 
     configs = [
         "trt-external-payload-cluster-density.yaml",
@@ -587,6 +650,7 @@ async def has_openshift_regressed(
 async def has_networking_regressed(
     version: Annotated[str, Field(description="Version of OpenShift to look into")] = "4.19",
     lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
+    ctx: Context = None,
 ) -> str:
     """
     Runs a performance regression analysis against networking-focused configs.
@@ -594,7 +658,14 @@ async def has_networking_regressed(
     Checks only the following Orion configurations:
       - small-scale-udn-l3.yaml
       - trt-external-payload-node-density-cni.yaml
+
+    Args:
+        version: Openshift version to look into.
+        lookback: The number of days to look back for performance data. Defaults to 15 days.
+        ctx: MCP context for accessing request headers
     """
+    # Extract and set ES_SERVER from request headers if present
+    _extract_and_set_es_server(ctx)
 
     configs = [
         "small-scale-udn-l3.yaml",
@@ -618,6 +689,7 @@ async def metrics_correlation(
     since: Annotated[str, Field(description="Date to begin looking back for performance data")] = None,
     version: Annotated[str, Field(description="Version of OpenShift to look into")] = "4.19",
     lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
+    ctx: Context = None,
 ) -> types.ImageContent | types.TextContent:
     """
     Calculate and visualise the correlation between two metrics for a given
@@ -627,6 +699,8 @@ async def metrics_correlation(
     returned. If either metric is missing from the Orion results the function
     falls back to returning a textual error message.
     """
+    # Extract and set ES_SERVER from request headers if present
+    _extract_and_set_es_server(ctx)
 
     default_config = "trt-external-payload-cluster-density.yaml"
     config_value = config_name or default_config
@@ -667,6 +741,7 @@ async def has_nightly_regressed(
     previous_nightly: Annotated[str, Field(description="Optional previous nightly to compare against (e.g., '4.22.0-0.nightly-2026-01-01-123456')")] = "",
     lookback: Annotated[str, Field(description="Number of days to lookback")] = "30",
     configs: Annotated[str, Field(description="Comma-separated list of config files (optional, defaults to TRT configs)")] = "",
+    ctx: Context = None,
 ) -> str:
     """
     Detect regressions for a specific OpenShift nightly version.
@@ -682,10 +757,14 @@ async def has_nightly_regressed(
                           between previous_nightly and nightly_version dates is analyzed.
         lookback: Days to look back for data. Defaults to 30.
         configs: Comma-separated list of config files. Defaults to TRT configs.
+        ctx: MCP context for accessing request headers
 
     Returns:
         String with regression details or "No regressions found".
     """
+    # Extract and set ES_SERVER from request headers if present
+    _extract_and_set_es_server(ctx)
+
     # Parse the nightly version
     try:
         nightly_info = parse_nightly_version(nightly_version)

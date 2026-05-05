@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -24,6 +25,11 @@ import numpy as np
 
 # Define ORION_CONFIGS_PATH locally to avoid circular import
 ORION_CONFIGS_PATH = "/orion/examples/"
+
+# Context variable for ES config from encrypted request headers
+# Provides async-safe isolation between concurrent requests
+# Contains: es_server, es_metadata_index (optional), es_benchmark_index (optional)
+current_es_config: ContextVar[Optional[dict]] = ContextVar('current_es_config', default=None)
 
 # Fetch latest ACKs from GitHub main so acked UUIDs (e.g. added in Orion repo) are reflected in the container image.
 # See: https://github.com/cloud-bulldozer/orion/pull/305
@@ -161,6 +167,7 @@ async def run_orion(
     Returns:
         The result of the Orion command execution, including stdout and stderr.
     """
+    # get_data_source() checks context variable first, then environment variable
     data_source = get_data_source()
     if data_source == "":
         raise ValueError("Data source is not set")
@@ -211,16 +218,9 @@ async def run_orion(
         command.append("--display")
         command.append(display.strip())
 
-    es_metadata_index = resolve_env_var(
-        "es_metadata_index",
-        "ES_METADATA_INDEX",
-        "perf_scale_ci*",
-    )
-    es_benchmark_index = resolve_env_var(
-        "es_benchmark_index",
-        "ES_BENCHMARK_INDEX",
-        "ripsaw-kube-burner-*",
-    )
+    # Get indices from context (if present) or environment variables
+    es_metadata_index = get_es_metadata_index()
+    es_benchmark_index = get_es_benchmark_index()
 
     env = {
         "ES_SERVER": data_source,
@@ -229,7 +229,8 @@ async def run_orion(
         "es_benchmark_index": es_benchmark_index
     }
 
-    print(f"Env: {env}")
+    # Log env
+    print(f"Env: version={version}, es_metadata_index={es_metadata_index}, es_benchmark_index={es_benchmark_index}")
     result = await run_command_async(command, env=env, cwd="/tmp")
     # Log the full result for debugging
     print(f"Orion return code: {result.returncode}")
@@ -286,16 +287,71 @@ def get_data_source() -> str:
     """
     Provide the data source URL for Orion analysis.
 
-    User must launch MCP server with the environment variable ES_SERVER
-    set to the OpenSearch URL.
+    Checks ES_SERVER in this order:
+    1. Context variable (from encrypted request header)
+    2. Environment variable (fallback)
 
     Returns:
         The OpenSearch URL as a string.
     """
+    # Check context variable first (set from encrypted header)
+    es_config = current_es_config.get()
+    if es_config and "es_server" in es_config:
+        print("Using ES_SERVER from encrypted request header")
+        return es_config["es_server"]
+
+    # Fall back to environment variable
     value = os.environ.get("ES_SERVER")
     if value is None:
         raise EnvironmentError("ES_SERVER environment variable is not set")
+    print("Using ES_SERVER from environment variable")
     return value
+
+
+def get_es_metadata_index() -> str:
+    """
+    Get es_metadata_index from context or environment with fallback.
+
+    Checks in this order:
+    1. Context variable (from encrypted request header)
+    2. Environment variables (es_metadata_index or ES_METADATA_INDEX)
+    3. Default: "perf_scale_ci*"
+
+    Returns:
+        The metadata index pattern as a string.
+    """
+    # Check context variable first
+    es_config = current_es_config.get()
+    if es_config and "es_metadata_index" in es_config:
+        print("Using es_metadata_index from encrypted request header")
+        return es_config["es_metadata_index"]
+
+    # Fall back to environment variable
+    print("Using es_metadata_index from environment/default")
+    return resolve_env_var("es_metadata_index", "ES_METADATA_INDEX", "perf_scale_ci*")
+
+
+def get_es_benchmark_index() -> str:
+    """
+    Get es_benchmark_index from context or environment with fallback.
+
+    Checks in this order:
+    1. Context variable (from encrypted request header)
+    2. Environment variables (es_benchmark_index or ES_BENCHMARK_INDEX)
+    3. Default: "ripsaw-kube-burner-*"
+
+    Returns:
+        The benchmark index pattern as a string.
+    """
+    # Check context variable first
+    es_config = current_es_config.get()
+    if es_config and "es_benchmark_index" in es_config:
+        print("Using es_benchmark_index from encrypted request header")
+        return es_config["es_benchmark_index"]
+
+    # Fall back to environment variable
+    print("Using es_benchmark_index from environment/default")
+    return resolve_env_var("es_benchmark_index", "ES_BENCHMARK_INDEX", "ripsaw-kube-burner-*")
 
 
 async def orion_metrics(config_list: list, version: str = "4.20") -> dict | str:
