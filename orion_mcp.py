@@ -444,22 +444,37 @@ async def get_pr_details(organization: str, repository: str, pull_request: str, 
             lookback=lookback,
             input_vars=input_vars
         )
-        data = json.loads(result.stdout)
-        
-        if "periodic_avg" not in data or "pull" not in data:
-            return types.TextContent(
-                type="text", 
-                text="Having issues finding PR data, please ensure the version the PR was tested on is correct and the PR was tested against the correct version of OpenShift."
-            )
-                
-        pull_data = data["pull"]
-        periodic_avg = data["periodic_avg"]
-        
+
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as e:
+            print(f"Failed to parse orion output for {full_config_path}: {e}")
+            continue
+
+        # Handle both list format (actual orion output) and dict format (expected)
+        if isinstance(data, list):
+            # Orion returns a list of results - use it directly as pull_data
+            if not data:
+                print(f"Empty results from orion for {full_config_path}")
+                continue
+            pull_data = data
+            periodic_avg = {}  # No periodic average available in list format
+            print(f"Received list format from orion with {len(data)} entries for {full_config_path}")
+        elif isinstance(data, dict):
+            if "periodic_avg" not in data or "pull" not in data:
+                print(f"Missing periodic_avg or pull in orion output for {full_config_path}")
+                continue
+            pull_data = data["pull"]
+            periodic_avg = data["periodic_avg"]
+        else:
+            print(f"Unexpected data type from orion: {type(data)}")
+            continue
+
         # Add percentage changes to all metrics in pull data
         for pull_entry in pull_data:
             if "metrics" not in pull_entry:
                 continue
-                
+
             for metric_name, metric_data in pull_entry["metrics"].items():
                 # Extract periodic value
                 if metric_name not in periodic_avg:
@@ -470,22 +485,28 @@ async def get_pr_details(organization: str, repository: str, pull_request: str, 
                         periodic_value = periodic_data.get("value", 0)
                     else:
                         periodic_value = periodic_data
-                
+
                 # Calculate percentage change
                 pull_value = metric_data.get("value", 0)
                 if periodic_value != 0 and pull_value is not None and periodic_value is not None:
                     percentage_change = ((pull_value - periodic_value) / periodic_value) * 100
                 else:
                     percentage_change = 0
-                
+
                 metric_data["percentage_change"] = percentage_change
-        
+
         summaries.append({
             "config": full_config_path,
             "periodic_avg": periodic_avg,
             "pull": pull_data
         })
-    
+
+    if not summaries:
+        return types.TextContent(
+            type="text",
+            text="No performance data found for this PR. Please ensure the PR has been tested and the version is correct."
+        )
+
     return summaries
 
 @mcp.tool()
