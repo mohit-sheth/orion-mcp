@@ -442,7 +442,8 @@ async def get_pr_details(organization: str, repository: str, pull_request: str, 
             config=full_config_path,
             version=version,
             lookback=lookback,
-            input_vars=input_vars
+            input_vars=input_vars,
+            pr_analysis=True,
         )
 
         try:
