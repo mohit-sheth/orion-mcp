@@ -154,6 +154,7 @@ async def run_orion(
     input_vars: Optional[dict] = None,
     display: Optional[str] = None,
     pr_analysis: bool = False,
+    pull_numbers: Optional[list[int]] = None,
 ) -> subprocess.CompletedProcess:
     """
     Execute Orion to analyze performance data for regressions.
@@ -221,6 +222,11 @@ async def run_orion(
 
     if pr_analysis:
         command.append("--pr-analysis")
+
+    if pull_numbers:
+        for pn in pull_numbers:
+            command.append("--pull-number")
+            command.append(str(pn))
 
     # Get indices from context (if present) or environment variables
     es_metadata_index = get_es_metadata_index()

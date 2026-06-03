@@ -399,22 +399,53 @@ async def get_orion_performance_data(
     except Exception as e:
         return {"error": str(e)}
 
-async def get_pr_details(organization: str, repository: str, pull_request: str, version: str = "4.20", lookback: str = "15") -> list[dict]:
+def _add_percentage_changes(pulls_list: list[dict], periodic_avg: dict) -> None:
+    """Calculate and set percentage_change on each metric in pull data."""
+    for pull_obj in pulls_list:
+        for pull_entry in pull_obj.get("data", []):
+            for metric_name, metric_data in pull_entry.get("metrics", {}).items():
+                if metric_name not in periodic_avg:
+                    periodic_value = None
+                else:
+                    periodic_data = periodic_avg[metric_name]
+                    if isinstance(periodic_data, dict):
+                        periodic_value = periodic_data.get("value")
+                    else:
+                        periodic_value = periodic_data
+
+                pull_value = metric_data.get("value")
+                if (
+                    isinstance(periodic_value, (int, float))
+                    and isinstance(pull_value, (int, float))
+                    and periodic_value != 0
+                ):
+                    metric_data["percentage_change"] = ((pull_value - periodic_value) / periodic_value) * 100
+                else:
+                    metric_data["percentage_change"] = None
+
+
+async def get_pr_details(
+    organization: str,
+    repository: str,
+    pull_requests: list[str],
+    version: str = "4.20",
+    lookback: str = "15",
+) -> list[dict]:
     """
     Get PR performance analysis details by running Orion with input variables.
 
     Args:
         organization: GitHub organization name
         repository: Repository name
-        pull_request: Pull request number
+        pull_requests: List of pull request numbers to analyze
         version: OpenShift version to analyze
         lookback: Days to look back for data
 
     Returns:
         List of dictionaries containing PR analysis results for each config.
-        Each dictionary contains the config, periodic_avg, and pull.
+        Each dictionary contains the config, periodic_avg, and pulls.
         periodic_avg is the average of the periodic metrics for the version.
-        pull contains the results from running performance tests aginst the pull request.
+        pulls is a list of {pr, data} objects with results for each PR.
         The LLM should compare the periodic_avg to the pull metrics and determine if the PR introduces a performance regression.
         The LLM should use a 10% threshold to determine if the PR introduces a performance regression.
     """
@@ -426,11 +457,18 @@ async def get_pr_details(organization: str, repository: str, pull_request: str, 
         "trt-external-payload-crd-scale.yaml",
     ]
 
+    if not pull_requests:
+        raise ValueError("At least one pull request number is required")
+    try:
+        pull_numbers = [int(pr) for pr in pull_requests]
+    except ValueError as exc:
+        raise ValueError("Pull request numbers must be integers") from exc
+
     input_vars = {
         "jobtype": "pull",
         "organization": organization,
         "repository": repository,
-        "pull_number": pull_request,
+        "pull_number": pull_requests[0],
         "version": version
     }
 
@@ -444,6 +482,7 @@ async def get_pr_details(organization: str, repository: str, pull_request: str, 
             lookback=lookback,
             input_vars=input_vars,
             pr_analysis=True,
+            pull_numbers=pull_numbers,
         )
 
         try:
@@ -452,61 +491,28 @@ async def get_pr_details(organization: str, repository: str, pull_request: str, 
             print(f"Failed to parse orion output for {full_config_path}: {e}")
             continue
 
-        # Handle both list format (actual orion output) and dict format (expected)
-        if isinstance(data, list):
-            # Orion returns a list of results - use it directly as pull_data
-            if not data:
-                print(f"Empty results from orion for {full_config_path}")
-                continue
-            pull_data = data
-            periodic_avg = {}  # No periodic average available in list format
-            print(f"Received list format from orion with {len(data)} entries for {full_config_path}")
-        elif isinstance(data, dict):
-            if "periodic_avg" not in data or "pull" not in data:
-                print(f"Missing periodic_avg or pull in orion output for {full_config_path}")
-                continue
-            pull_data = data["pull"]
-            periodic_avg = data["periodic_avg"]
-        else:
-            print(f"Unexpected data type from orion: {type(data)}")
+        if not isinstance(data, dict):
+            print(f"Unexpected data type from orion for {full_config_path}: {type(data)}")
             continue
 
-        # Add percentage changes to all metrics in pull data
-        for pull_entry in pull_data:
-            if "metrics" not in pull_entry:
-                continue
+        if "periodic_avg" not in data:
+            print(f"Missing periodic_avg in orion output for {full_config_path}")
+            continue
 
-            for metric_name, metric_data in pull_entry["metrics"].items():
-                # Extract periodic value
-                if metric_name not in periodic_avg:
-                    periodic_value = 0
-                else:
-                    periodic_data = periodic_avg[metric_name]
-                    if isinstance(periodic_data, dict):
-                        periodic_value = periodic_data.get("value", 0)
-                    else:
-                        periodic_value = periodic_data
+        periodic_avg = data["periodic_avg"]
 
-                # Calculate percentage change
-                pull_value = metric_data.get("value", 0)
-                if periodic_value != 0 and pull_value is not None and periodic_value is not None:
-                    percentage_change = ((pull_value - periodic_value) / periodic_value) * 100
-                else:
-                    percentage_change = 0
+        if "pulls" not in data:
+            print(f"Missing pulls in orion output for {full_config_path}")
+            continue
 
-                metric_data["percentage_change"] = percentage_change
+        pulls_list = data["pulls"]
+        _add_percentage_changes(pulls_list, periodic_avg)
 
         summaries.append({
             "config": full_config_path,
             "periodic_avg": periodic_avg,
-            "pull": pull_data
+            "pulls": pulls_list,
         })
-
-    if not summaries:
-        return types.TextContent(
-            type="text",
-            text="No performance data found for this PR. Please ensure the PR has been tested and the version is correct."
-        )
 
     return summaries
 
@@ -517,7 +523,8 @@ async def openshift_report_on_pr(
     lookback: Annotated[str, Field(description="Number of days to lookback")] = "15",
     organization: Annotated[str, Field(description="Organization to look into")] = "openshift",
     repository: Annotated[str, Field(description="Repository to look into")] = "ovn-kubernetes",
-    pull_request: Annotated[str, Field(description="PR to look into")] = "2841",
+    pull_request: Annotated[str, Field(description="PR number to analyze (for single PR)")] = "2841",
+    pull_requests: Annotated[str, Field(description="Comma-separated PR numbers to compare (e.g. '3169,3170'). Overrides pull_request if provided.")] = "",
     ctx: Context = None,
 ) -> dict:
     """
@@ -528,17 +535,27 @@ async def openshift_report_on_pr(
         lookback: The number of days to look back for performance data. Defaults to 15 days.
         organization: The organization to look into. Defaults to openshift.
         repository: The repository to look into. Defaults to ovn-kubernetes.
-        pull_request: The PR to look into. Defaults to 2841.
+        pull_request: Single PR number to analyze. Defaults to 2841.
+        pull_requests: Comma-separated PR numbers for multi-PR comparison (e.g. '3169,3170').
+            When provided, overrides pull_request.
         ctx: MCP context for accessing request headers
 
     Returns:
-        List of dictionaries containing PR analysis results for each version.
+        Dictionary with summaries containing PR analysis results for each config.
     """
-    # Extract and set ES_SERVER from request headers if present
     _extract_and_set_es_server(ctx)
 
-    # Get the PR details (will use ES_SERVER from context variable)
-    summaries = await get_pr_details(organization, repository, pull_request, version, lookback)
+    if pull_requests and pull_requests.strip():
+        pr_list = [pr.strip() for pr in pull_requests.split(",") if pr.strip()]
+    else:
+        pr_list = [pull_request]
+
+    summaries = await get_pr_details(organization, repository, pr_list, version, lookback)
+    if not summaries:
+        return {
+            "summaries": [],
+            "message": "No performance data found for this PR. Please ensure the PR has been tested and the version is correct."
+        }
     return {
         "summaries": summaries
     }
