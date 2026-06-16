@@ -13,27 +13,21 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-import httpx
 import matplotlib.pyplot as plt
 import numpy as np
 
 # Define ORION_CONFIGS_PATH locally to avoid circular import
-ORION_CONFIGS_PATH = "/orion/examples/"
+ORION_CONFIGS_PATH = "/Users/balatripurakumaribodapati/Desktop/orion-ai/orion/examples/"
 
 # Context variable for ES config from encrypted request headers
 # Provides async-safe isolation between concurrent requests
 # Contains: es_server, es_metadata_index (optional), es_benchmark_index (optional)
 current_es_config: ContextVar[Optional[dict]] = ContextVar('current_es_config', default=None)
-
-# Fetch latest ACKs from GitHub main so acked UUIDs (e.g. added in Orion repo) are reflected in the container image.
-# See: https://github.com/cloud-bulldozer/orion/pull/305
-REMOTE_ACK_URL = "https://raw.githubusercontent.com/cloud-bulldozer/orion/main/ack/all_ack.yaml"
 
 def resolve_env_var(primary_name: str, secondary_name: str, default_value: str) -> str:
     """
@@ -52,35 +46,6 @@ def resolve_env_var(primary_name: str, secondary_name: str, default_value: str) 
         return secondary_value
 
     return default_value
-
-
-async def get_latest_ack_path() -> Optional[str]:
-    """
-    Fetch the latest consolidated ACK file from Orion's GitHub main branch.
-    We pull from main so new acks apply even before a new Orion release is cut.
-    If the fetch fails, returns None and Orion uses its default/bundled acks.
-    """
-    max_attempts = 3
-    delay_seconds = 2
-    for attempt in range(1, max_attempts + 1):
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(REMOTE_ACK_URL)
-                resp.raise_for_status()
-            data = resp.content
-            fd, path = tempfile.mkstemp(suffix=".yaml", prefix="orion_ack_")
-            try:
-                os.write(fd, data)
-            finally:
-                os.close(fd)
-            print(f"Fetched latest ACK file from GitHub ({len(data)} bytes), using {path}")
-            return path
-        except (httpx.HTTPError, OSError) as exc:
-            print(f"Attempt {attempt}/{max_attempts} to fetch remote ACK file failed: {exc}")
-            if attempt < max_attempts:
-                await asyncio.sleep(delay_seconds)
-    print("Using Orion default ACK behavior (remote fetch failed)")
-    return None
 
 
 async def run_command_async(command: list[str] | str, env: Optional[dict] = None, shell: bool = False, cwd: Optional[str] = None) -> subprocess.CompletedProcess:
@@ -155,6 +120,8 @@ async def run_orion(
     display: Optional[str] = None,
     pr_analysis: bool = False,
     pull_numbers: Optional[list[int]] = None,
+    jira_ack: bool = False,
+    jira_status_filter: Optional[str] = None,
 ) -> subprocess.CompletedProcess:
     """
     Execute Orion to analyze performance data for regressions.
@@ -162,9 +129,10 @@ async def run_orion(
     Args:
         lookback: Days to look back for performance data.
         config: Path to the Orion configuration file to use for analysis.
-        data_source: Location of the data (OpenSearch URL) to analyze.
         version: Version to analyze.
         display: Optional field to display in the output (e.g., "ocpVirtVersion").
+        jira_ack: Use JIRA as ACK provider instead of file-based ACKs.
+        jira_status_filter: Only treat JIRA issues with this status as ACKs (e.g., "Done").
 
     Returns:
         The result of the Orion command execution, including stdout and stderr.
@@ -174,28 +142,17 @@ async def run_orion(
     if data_source == "":
         raise ValueError("Data source is not set")
 
-    ack_path = await get_latest_ack_path()
     command = []
     if not shutil.which("orion"):
         print("Using orion from podman")
-        command = ["podman", "run", "--env-host"]
-        if ack_path:
-            command.extend(["-v", f"{ack_path}:/ack/all_ack.yaml:ro"])
-        command.extend([
+        command = ["podman", "run", "--env-host",
             "orion",
             "orion",
             "--lookback", f"{lookback}d",
             "--hunter-analyze",
             "--config", config,
             "-o", "json"
-        ])
-        if ack_path:
-            orion_args_start = command.index("orion") + 1
-            command = (
-                command[: orion_args_start + 1]
-                + ["--ack", "/ack/all_ack.yaml"]
-                + command[orion_args_start + 1 :]
-            )
+        ]
     else:
         print("Using orion from path")
         command = [
@@ -205,28 +162,27 @@ async def run_orion(
             "--config", config,
             "-o", "json"
         ]
-        if ack_path:
-            command = command[:1] + ["--ack", ack_path] + command[1:]
+
+    if jira_ack:
+        command.append("--jira-ack")
+    if jira_status_filter:
+        command.extend(["--jira-status-filter", jira_status_filter])
 
     if since is not None:
-        command.append("--since")
-        command.append(since)
+        command.extend(["--since", since])
 
     if input_vars is not None:
-        command.append("--input-vars")
-        command.append(f"{json.dumps(input_vars)}")
+        command.extend(["--input-vars", json.dumps(input_vars)])
 
     if display is not None and display.strip():
-        command.append("--display")
-        command.append(display.strip())
+        command.extend(["--display", display.strip()])
 
     if pr_analysis:
         command.append("--pr-analysis")
 
     if pull_numbers:
         for pn in pull_numbers:
-            command.append("--pull-number")
-            command.append(str(pn))
+            command.extend(["--pull-number", str(pn)])
 
     # Get indices from context (if present) or environment variables
     es_metadata_index = get_es_metadata_index()
@@ -236,7 +192,7 @@ async def run_orion(
         "ES_SERVER": data_source,
         "version": version,
         "es_metadata_index": es_metadata_index,
-        "es_benchmark_index": es_benchmark_index
+        "es_benchmark_index": es_benchmark_index,
     }
 
     # Log env

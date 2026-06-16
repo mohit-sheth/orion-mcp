@@ -48,7 +48,7 @@ mcp = FastMCP(name="orion-mcp",
               port=3030,
               log_level='INFO')
 
-ORION_CONFIGS_PATH = "/orion/examples/"
+ORION_CONFIGS_PATH = "/Users/balatripurakumaribodapati/Desktop/orion-ai/orion/examples/"
 _configs=list_orion_configs()
 if _configs == []:
     ORION_CONFIGS = [
@@ -837,7 +837,13 @@ async def has_nightly_regressed(
 
     for config in config_list:
         full_config_path = os.path.join(ORION_CONFIGS_PATH, config)
-        result = await run_orion(config=full_config_path, version=nightly_info.major_version, lookback=lookback)
+        result = await run_orion(
+            config=full_config_path,
+            version=nightly_info.major_version,
+            lookback=lookback,
+            jira_ack=True,
+            jira_status_filter="Done",
+        )
 
         try:
             data = json.loads(result.stdout)
