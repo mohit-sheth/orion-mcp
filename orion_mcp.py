@@ -48,7 +48,7 @@ mcp = FastMCP(name="orion-mcp",
               port=3030,
               log_level='INFO')
 
-ORION_CONFIGS_PATH = "/Users/balatripurakumaribodapati/Desktop/orion-ai/orion/examples/"
+ORION_CONFIGS_PATH = "/orion/examples/"
 _configs=list_orion_configs()
 if _configs == []:
     ORION_CONFIGS = [
