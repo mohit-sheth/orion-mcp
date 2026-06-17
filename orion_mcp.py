@@ -622,6 +622,8 @@ async def _run_regression_checks(
             config=full_config_path,
             version=version,
             lookback=lookback,
+            jira_ack=True,
+            jira_status_filter="Done",
         )
 
         if result.returncode not in (0, 3):
