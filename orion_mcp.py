@@ -136,7 +136,11 @@ async def get_release_date(
 @mcp.tool()
 def get_orion_configs() -> list[str]:
     """
-    Return the list of Orion config filenames (not full paths).
+    Return the list of available Orion config filenames.
+
+    Use this tool when the user asks what tests/configs are available,
+    or to find the correct config name for a partial match
+    (e.g., user says "cudn" — find the matching config file).
     """
     return orion_configs(ORION_CONFIGS)
 
@@ -235,22 +239,22 @@ async def openshift_report_on(
     ctx: Context = None,
 ) -> types.ImageContent | types.TextContent:
     """
-    Captures a performance analysis against the specified OpenShift version using Orion.
+    Generate a performance chart or data report for a metric across OpenShift versions.
 
-    Orion uses an EDivisive algorithm to analyze performance data from a specified
-    configuration file to detect any performance regressions.
+    Use this tool when the user asks to visualize, chart, plot, or show a metric over time.
+    Returns an image (chart), JSON data, or both depending on the options parameter.
 
     Args:
-        versions: Comma-separated list of OpenShift versions to analyze.
-        lookback: The number of days to look back for performance data. Defaults to 15 days.
-        since: The date to begin looking back for performance data. Defaults to None.
-        metric: The metric to analyze. Defaults to podReadyLatency_P99.
-        config_name: The config to analyze. Defaults to small-scale-udn-l3.yaml.
-        options: Output format and optional display field. Format: 'output_format' or
-                'output_format:display_field'. Examples: 'image', 'json:ocpVirtVersion'.
+        versions: Comma-separated list of OpenShift versions to analyze (e.g., '4.19,4.20').
+        lookback: Days to look back for performance data. Defaults to 15.
+        since: Date to begin lookback (e.g., '2026-01-01'). Defaults to None.
+        metric: The metric to analyze (e.g., 'podReadyLatency_P99', 'ovnkube_controller_cpu').
+        config_name: Orion config filename (e.g., 'small-scale-udn-l3.yaml').
+        options: Output format — 'image' for chart, 'json' for raw data, 'both' for both.
+                 Append ':field' to group by a field (e.g., 'json:ocpVirtVersion').
 
     Returns:
-        Returns an image showing the performance overtime, or JSON data based on options.
+        Image (chart) or JSON data showing metric values over time for each version.
     """
     # Extract and set ES_SERVER from request headers if present
     _extract_and_set_es_server(ctx)
@@ -361,10 +365,21 @@ async def get_orion_performance_data(
     since: Annotated[str | None, Field(description="Date to begin looking back for performance data")] = None,
     ctx: Context = None,
 ) -> dict:
-    """Return performance data values for a specific config/metric/version.
+    """Return raw numeric performance data values for a specific config/metric/version.
+
+    Use this tool when the user asks for actual numbers, statistics, or data analysis
+    on a metric. Returns a list of float values you can compute min, max, avg, and
+    trend analysis on.
+
+    Args:
+        config_name: Orion config filename (e.g., 'small-scale-udn-l3.yaml').
+        metric: Metric to query (e.g., 'podReadyLatency_P99').
+        version: OpenShift version (e.g., '4.19', '5.0').
+        lookback: Days to look back. Defaults to 15.
+        since: Date to begin lookback (e.g., '2026-01-01'). Defaults to None.
 
     Returns:
-        Dict with config, metric, version, lookback, values, count.
+        Dict with config, metric, version, lookback, values (list of floats), count.
     """
     # Extract and set ES_SERVER from request headers if present
     _extract_and_set_es_server(ctx)
@@ -529,20 +544,27 @@ async def openshift_report_on_pr(
     ctx: Context = None,
 ) -> dict:
     """
-    Captures a performance analysis against the specified OpenShift version using Orion.
+    Analyze GitHub pull request(s) performance impact against OpenShift baselines.
+
+    Compares PR test results against periodic baseline metrics for each config.
+    Returns percentage changes for every metric so regressions and improvements
+    can be identified. Use a 10% threshold for significant changes.
+
+    Use this tool when the user asks about a PR's performance, whether a PR
+    introduced a regression, or to compare PRs against baseline metrics.
 
     Args:
-        version: OpenShift version to analyze.
-        lookback: The number of days to look back for performance data. Defaults to 15 days.
-        organization: The organization to look into. Defaults to openshift.
-        repository: The repository to look into. Defaults to ovn-kubernetes.
-        pull_request: Single PR number to analyze. Defaults to 2841.
-        pull_requests: Comma-separated PR numbers for multi-PR comparison (e.g. '3169,3170').
-            When provided, overrides pull_request.
-        ctx: MCP context for accessing request headers
+        version: OpenShift version to compare against (e.g., '4.19', '4.20').
+        lookback: Days to look back for baseline data. Defaults to 15.
+        organization: GitHub organization (e.g., 'openshift').
+        repository: GitHub repository (e.g., 'ovn-kubernetes').
+        pull_request: Single PR number to analyze (e.g., '2841').
+        pull_requests: Comma-separated PR numbers for multi-PR comparison
+            (e.g., '3169,3170'). Overrides pull_request if provided.
 
     Returns:
-        Dictionary with summaries containing PR analysis results for each config.
+        Per-config summaries with periodic_avg baselines and PR metric values
+        including percentage_change for each metric.
     """
     _extract_and_set_es_server(ctx)
 
@@ -661,19 +683,22 @@ async def has_openshift_regressed(
     ctx: Context = None,
 ) -> str:
     """
-    Runs a performance regression analysis against the OpenShift version using Orion.
+    Check if an OpenShift version has performance regressions across core configs.
 
-    Orion uses an EDivisive algorithm to analyze performance data from a specified
-    configuration file to detect any performance regressions.
+    Runs EDivisive changepoint detection on cluster-density, node-density,
+    node-density-cni, and crd-scale configs. Reports affected metrics with
+    percentage changes and PRs added since the previous OCP version.
+
+    Use this tool when the user asks if a version has regressed, or for a
+    general health check of an OpenShift release.
 
     Args:
-        version: Openshift version to look into.
-        lookback: The number of days to look back for performance data. Defaults to 15 days.
-        ctx: MCP context for accessing request headers
+        version: OpenShift version to check (e.g., '4.19', '5.0').
+        lookback: Days to look back for data. Defaults to 15.
 
     Returns:
-        Returns string stating if there is a regression and in which config it was found.
-                       If no regressions are found, returns "No regressions found".
+        Detected changepoints with affected configs, metrics, and PRs,
+        or "No changepoints found".
     """
     # Extract and set ES_SERVER from request headers if present
     _extract_and_set_es_server(ctx)
@@ -695,16 +720,19 @@ async def has_networking_regressed(
     ctx: Context = None,
 ) -> str:
     """
-    Runs a performance regression analysis against networking-focused configs.
+    Check for performance regressions in networking-focused configs only.
 
-    Checks only the following Orion configurations:
-      - small-scale-udn-l3.yaml
-      - trt-external-payload-node-density-cni.yaml
+    Runs EDivisive changepoint detection on small-scale-udn-l3 and
+    node-density-cni configs. Use this when the user asks specifically
+    about networking, OVN, UDN, or CNI performance regressions.
 
     Args:
-        version: Openshift version to look into.
-        lookback: The number of days to look back for performance data. Defaults to 15 days.
-        ctx: MCP context for accessing request headers
+        version: OpenShift version to check (e.g., '4.19').
+        lookback: Days to look back for data. Defaults to 15.
+
+    Returns:
+        Detected changepoints with affected metrics and PRs,
+        or "No changepoints found".
     """
     # Extract and set ES_SERVER from request headers if present
     _extract_and_set_es_server(ctx)
@@ -734,12 +762,22 @@ async def metrics_correlation(
     ctx: Context = None,
 ) -> types.ImageContent | types.TextContent:
     """
-    Calculate and visualise the correlation between two metrics for a given
-    Orion configuration.
+    Calculate and visualize the correlation between two metrics as a scatter plot.
 
-    A scatter-plot annotated with the Pearson correlation coefficient is
-    returned. If either metric is missing from the Orion results the function
-    falls back to returning a textual error message.
+    Returns a scatter plot image annotated with the Pearson correlation coefficient.
+    Use this when the user asks if two metrics are related, correlated, or wants
+    to see how one metric affects another (e.g., "does CPU usage correlate with
+    pod ready latency?").
+
+    Args:
+        metric1: First metric (e.g., 'podReadyLatency_P99').
+        metric2: Second metric (e.g., 'ovnCPU_avg').
+        config_name: Orion config filename to pull data from.
+        version: OpenShift version to analyze.
+        lookback: Days to look back for data. Defaults to 15.
+
+    Returns:
+        Scatter plot image with Pearson correlation, or error text if metrics not found.
     """
     # Extract and set ES_SERVER from request headers if present
     _extract_and_set_es_server(ctx)
@@ -786,10 +824,19 @@ async def has_nightly_regressed(
     ctx: Context = None,
 ) -> str:
     """
-    Detect regressions for a specific OpenShift nightly version.
+    Detect regressions for a specific OpenShift nightly version and list PRs
+    that landed between nightly builds.
 
     Parses the nightly version to extract major version and date, queries Orion,
     filters data to the nightly date, and reports any changepoints found.
+    For each regression, reports the affected metrics with percentage changes
+    and lists the PRs added since the previous OCP version.
+
+    Use this tool when the user asks:
+    - What regressed in a nightly build
+    - What PRs/changes landed between two nightlies
+    - To compare two nightly builds
+    - What caused a regression in a nightly
 
     If previous_nightly is specified, only looks for regressions between the two nightlies.
 
@@ -799,10 +846,10 @@ async def has_nightly_regressed(
                           between previous_nightly and nightly_version dates is analyzed.
         lookback: Days to look back for data. Defaults to 30.
         configs: Comma-separated list of config files. Defaults to TRT configs.
-        ctx: MCP context for accessing request headers
 
     Returns:
-        String with regression details or "No regressions found".
+        Regression details with affected metrics, percentage changes, and PRs added,
+        or "No regressions found".
     """
     # Extract and set ES_SERVER from request headers if present
     _extract_and_set_es_server(ctx)
